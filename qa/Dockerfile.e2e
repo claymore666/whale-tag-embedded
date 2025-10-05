@@ -1,0 +1,77 @@
+# Multi-stage Dockerfile for End-to-End QA Testing
+# Stage 1: Build LD_PRELOAD library for ARM64
+# Stage 2: Install library into SD card image
+# Stage 3: Create testing environment with QEMU
+
+FROM debian:bookworm AS ld-preload-builder
+
+RUN apt-get update && apt-get install -y \
+    gcc-aarch64-linux-gnu \
+    make \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY qa/libpigpio_sim/ /build/
+
+# Cross-compile for ARM64
+RUN aarch64-linux-gnu-gcc -Wall -Wextra -fPIC -shared -pthread \
+    -o libpigpio_sim.so libpigpio_sim.c
+
+# Stage 2: Prepare image with LD_PRELOAD (note: actual installation happens at runtime)
+FROM debian:bookworm AS image-prep
+
+WORKDIR /whale-tag-embedded
+
+# Copy SD card image
+COPY out/sdcard.img /sdcard.img
+
+# Copy LD_PRELOAD library from builder stage
+COPY --from=ld-preload-builder /build/libpigpio_sim.so /libpigpio_sim.so
+
+# Stage 3: Final testing environment
+FROM debian:bookworm
+
+RUN apt-get update && apt-get install -y \
+    binfmt-support \
+    qemu-user-static \
+    python3 \
+    netcat-openbsd \
+    dos2unix \
+    fdisk \
+    parted \
+    e2fsprogs \
+    sudo \
+    file \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /whale-tag-embedded
+
+# Copy build tools
+COPY build/ /whale-tag-embedded/build/
+
+# Copy SD card image from prep stage
+COPY --from=image-prep /sdcard.img /qa-image.img
+
+# Copy LD_PRELOAD library from prep stage
+COPY --from=image-prep /libpigpio_sim.so /libpigpio_sim.so
+
+# Create entrypoint script to run tests with LD_PRELOAD via bind mount
+RUN echo '#!/bin/bash\n\
+set -e\n\
+echo "=== Testing cetiTagApp with LD_PRELOAD ==="\n\
+echo "Using bind mount to provide LD_PRELOAD library"\n\
+echo ""\n\
+timeout 10 build/rpi-image run --image /qa-image.img \\\n\
+  --bind /whale-tag-embedded:/lib-mount \\\n\
+  env LD_PRELOAD=/lib-mount/libpigpio_sim.so \\\n\
+  /opt/ceti-tag-data-capture/bin/cetiTagApp || true\n\
+\n\
+echo ""\n\
+echo "=== Test complete ==="\n\
+' > /entrypoint.sh && chmod +x /entrypoint.sh
+
+# Expose UDP port for sensor control
+EXPOSE 9999/udp
+
+# Default command: Run entrypoint script
+CMD ["/entrypoint.sh"]
