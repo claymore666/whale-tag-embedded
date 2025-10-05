@@ -28,6 +28,7 @@ TagConfig g_config = {
     },
     .surface_pressure = CONFIG_DEFAULT_SURFACE_PRESSURE_BAR, // depth_m is roughly 10*pressure_bar
     .dive_pressure = CONFIG_DEFAULT_DIVE_PRESSURE_BAR,       // depth_m is roughly 10*pressure_bar
+    .burn_depth_threshold_bar = CONFIG_DEFAULT_BURN_DEPTH_THRESHOLD_BAR, // 1m depth for burnwire
     .release_voltage_v = CONFIG_DEFAULT_RELEASE_VOLTAGE_V,
     .critical_voltage_v = CONFIG_DEFAULT_CRITICAL_VOLTAGE_V,
     .timeout_s = CONFIG_DEFAULT_TIMEOUT_S,
@@ -35,6 +36,7 @@ TagConfig g_config = {
     .burn_interval_s = CONFIG_DEFAULT_BURN_INTERVAL_S,
     .recovery = {
         .enabled = CONFIG_DEFAULT_RECOVERY_ENABLED,
+        .on_whale = CONFIG_DEFAULT_APRS_ON_WHALE,
         .freq_MHz = CONFIG_DEFAULT_RECOVERY_FREQUENCY_MHZ,
         .callsign = {
             .callsign = CONFIG_DEFAULT_RECOVERY_CALLSIGN,
@@ -57,12 +59,14 @@ static ConfigError __config_parse_audio_filter_type(const char *_String);
 static ConfigError __config_parse_audio_sample_rate(const char *_String);
 static ConfigError __config_parse_surface_pressure(const char *_String);
 static ConfigError __config_parse_dive_pressure(const char *_String);
+static ConfigError __config_parse_burn_depth_threshold(const char *_String);
 static ConfigError __config_parse_release_voltage(const char *_String);
 static ConfigError __config_parse_critical_voltage(const char *_String);
 static ConfigError __config_parse_timeout(const char *_String);
 static ConfigError __config_parse_time_of_day(const char *_String);
 static ConfigError __config_parse_burn_interval_value(const char *_String);
 static ConfigError __config_parse_recovery_enable_value(const char *_String);
+static ConfigError __config_parse_aprs_on_whale_value(const char *_String);
 static ConfigError __config_parse_recovery_callsign_value(const char *_String);
 static ConfigError __config_parse_recovery_recipient_value(const char *_String);
 static ConfigError __config_parse_recovery_freq_value(const char *_String);
@@ -80,6 +84,7 @@ const ConfigList config_keys[] = {
 
     {.key = STR_FROM("surface_pressure"), .parse = __config_parse_surface_pressure},
     {.key = STR_FROM("dive_pressure"), .parse = __config_parse_dive_pressure},
+    {.key = STR_FROM("burn_depth_threshold"), .parse = __config_parse_burn_depth_threshold},
     {.key = STR_FROM("release_voltage"), .parse = __config_parse_release_voltage},
     {.key = STR_FROM("critical_voltage"), .parse = __config_parse_critical_voltage},
 
@@ -89,6 +94,7 @@ const ConfigList config_keys[] = {
     {.key = STR_FROM("audio_bitdepth"), .parse = __config_parse_audio_bitdepth},
     {.key = STR_FROM("audio_sample_rate"), .parse = __config_parse_audio_sample_rate},
     {.key = STR_FROM("rec_enabled"), .parse = __config_parse_recovery_enable_value},
+    {.key = STR_FROM("aprs_on_whale"), .parse = __config_parse_aprs_on_whale_value},
     {.key = STR_FROM("rec_callsign"), .parse = __config_parse_recovery_callsign_value},
     {.key = STR_FROM("rec_recipient"), .parse = __config_parse_recovery_recipient_value},
     {.key = STR_FROM("rec_freq"), .parse = __config_parse_recovery_freq_value},
@@ -213,6 +219,24 @@ static ConfigError __config_parse_surface_pressure(const char *_String) {
     return CONFIG_OK;
 }
 
+static ConfigError __config_parse_burn_depth_threshold(const char *_String) {
+    char *end_ptr;
+    float parsed_value;
+
+    errno = 0;
+    parsed_value = strtof(_String, &end_ptr);
+    if (parsed_value == 0.0f) {
+        if ((_String == end_ptr) || (errno == ERANGE)) {
+            return CONFIG_ERR_INVALID_VALUE;
+        }
+    }
+
+    // ToDo: Check acceptable range
+    g_config.burn_depth_threshold_bar = parsed_value;
+    CETI_DEBUG("burn depth threshold %.2f bar", parsed_value);
+    return CONFIG_OK;
+}
+
 static ConfigError __config_parse_release_voltage(const char *_String) {
     char *end_ptr;
     float parsed_value;
@@ -317,6 +341,18 @@ static ConfigError __config_parse_recovery_enable_value(const char *_String) {
         CETI_DEBUG("recovery board enabled");
     } else {
         CETI_DEBUG("recovery board disabled");
+    }
+#endif
+    return CONFIG_OK;
+}
+
+static ConfigError __config_parse_aprs_on_whale_value(const char *_String) {
+    g_config.recovery.on_whale = strtobool(_String, NULL);
+#ifdef DEBUG
+    if (g_config.recovery.on_whale) {
+        CETI_DEBUG("APRS on whale enabled");
+    } else {
+        CETI_DEBUG("APRS on whale disabled");
     }
 #endif
     return CONFIG_OK;
@@ -509,6 +545,7 @@ void config_log(uint64_t timestamp) {
     fprintf(fConfig, "# Deployment Timestamp: %lu\n", timestamp);
     fprintf(fConfig, "surface_pressure = %.2f # bar\n", g_config.surface_pressure);
     fprintf(fConfig, "dive_pressure = %.2f # bar\n", g_config.dive_pressure);
+    fprintf(fConfig, "burn_depth_threshold = %.2f # bar\n", g_config.burn_depth_threshold_bar);
     fprintf(fConfig, "release_voltage = %.2f # V per cell\n", g_config.release_voltage_v);
     fprintf(fConfig, "critical_voltage = %.2f # V per cell\n", g_config.critical_voltage_v);
     fprintf(fConfig, "timeout_release = %lu # Seconds\n", g_config.timeout_s);
@@ -524,6 +561,7 @@ void config_log(uint64_t timestamp) {
     fprintf(fConfig, "audio_bitdepth =: %d\n", (int)g_config.audio.bit_depth);
     fprintf(fConfig, "audio_sample_rate = %d # KHz\n", (int)g_config.audio.sample_rate);
     fprintf(fConfig, "rec_enabled = %s\n", (g_config.recovery.enabled) ? "true" : "false");
+    fprintf(fConfig, "aprs_on_whale = %s\n", (g_config.recovery.on_whale) ? "true" : "false");
     char cs[15];
     callsign_to_str(&g_config.recovery.callsign, cs);
     fprintf(fConfig, "rec_callsign = %s\n", cs);

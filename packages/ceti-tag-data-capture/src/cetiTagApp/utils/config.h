@@ -19,11 +19,13 @@
 #define CONFIG_DEFAULT_AUDIO_FILTER_TYPE AUDIO_FILTER_WIDEBAND
 #define CONFIG_DEFAULT_SURFACE_PRESSURE_BAR (0.3) // depth_m is roughly 10*pressure_bar
 #define CONFIG_DEFAULT_DIVE_PRESSURE_BAR (0.5)    // depth_m is roughly 10*pressure_bar
+#define CONFIG_DEFAULT_BURN_DEPTH_THRESHOLD_BAR (0.4) // 4m depth for reliable submersion
 #define CONFIG_DEFAULT_RELEASE_VOLTAGE_V (6.4 / 2.0)
 #define CONFIG_DEFAULT_CRITICAL_VOLTAGE_V (6.2 / 2.0)
 #define CONFIG_DEFAULT_TIMEOUT_S (4 * 24 * 60 * 60)
 #define CONFIG_DEFAULT_BURN_INTERVAL_S (5 * 60)
 #define CONFIG_DEFAULT_RECOVERY_ENABLED 0
+#define CONFIG_DEFAULT_APRS_ON_WHALE 1  // Enable APRS transmission while on whale
 #define CONFIG_DEFAULT_RECOVERY_FREQUENCY_MHZ 145.050
 #define CONFIG_DEFAULT_RECOVERY_CALLSIGN "J75Y"
 #define CONFIG_DEFAULT_RECOVERY_SSID 1
@@ -41,6 +43,7 @@ typedef struct tag_configuration {
     AudioConfig audio;
     float surface_pressure;
     float dive_pressure;
+    float burn_depth_threshold_bar;
     float release_voltage_v;
     float critical_voltage_v;
     time_t timeout_s;
@@ -51,6 +54,7 @@ typedef struct tag_configuration {
     time_t burn_interval_s;
     struct {
         int enabled;
+        int on_whale;  // Enable APRS while on whale (ST_RECORD_SURFACE)
         APRSCallsign callsign;
         APRSCallsign recipient;
         float freq_MHz;
