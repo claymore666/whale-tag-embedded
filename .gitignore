@@ -135,3 +135,10 @@ raspios/
 packages/ceti-tag-data-capture/bin/
 packages/ceti-tag-data-capture/data
 *.timestamp
+
+# QA Testing Infrastructure
+qa/libpigpio_sim/build/
+qa/libpigpio_sim/*.so
+qa/test_scripts/__pycache__/
+qa/test_scripts/*.pyc
+test.results
