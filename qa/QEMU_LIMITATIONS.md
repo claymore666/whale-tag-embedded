@@ -166,6 +166,42 @@ The `qa/e2e-test.sh` script works for basic verification but:
 - Does not test state machine progression
 - Cannot validate depth-aware burnwire feature
 
+## ⚠️ CRITICAL: Config File Path Mismatch
+
+**Problem:** The test script writes config to `/mnt/img/data/config/ceti-config.txt` but firmware reads from `/data/config/ceti-config.txt` which gets redirected to `/tmp/qemu_data/config/ceti-config.txt`.
+
+**Root Cause:** Two separate filesystems:
+1. `/mnt/img/data/` - Mounted SD card image (where test script writes config)
+2. `/tmp/qemu_data/` - LD_PRELOAD redirection target (where firmware reads)
+
+**Impact:** Firmware loads default config values instead of test parameters:
+- `timeout_s` defaults to large value instead of test value (10s)
+- `burn_interval_s` defaults instead of 60s test value
+- Burnwire never triggers during test because timeout never expires
+
+**Solution:** Test script must copy config to BOTH locations:
+```bash
+# Write to mount point (for reference/debugging)
+docker exec $CONTAINER_NAME bash -c "
+    mkdir -p /mnt/img/data/config
+    cat > /mnt/img/data/config/ceti-config.txt <<EOF
+timeout_s=10
+burn_interval_s=60
+EOF
+"
+
+# ALSO write to LD_PRELOAD redirection target (for firmware to actually read)
+docker exec $CONTAINER_NAME bash -c "
+    mkdir -p /tmp/qemu_data/config
+    cat > /tmp/qemu_data/config/ceti-config.txt <<EOF
+timeout_s=10
+burn_interval_s=60
+EOF
+"
+```
+
+**Discovery:** Found by checking elapsed time (106s) vs timeout (10s) and realizing timeout check should have triggered. Investigation revealed config file didn't exist at redirected path.
+
 ## ✅ SOLUTION IMPLEMENTED: LD_PRELOAD File I/O Redirection
 
 **Status**: WORKING - Problem solved!

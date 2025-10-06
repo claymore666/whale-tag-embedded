@@ -113,6 +113,7 @@ docker exec $CONTAINER_NAME bash -c "
 # Inject test configuration
 echo "Injecting test configuration..."
 docker exec $CONTAINER_NAME bash -c "
+    # Write to mount point (for reference/debugging)
     mkdir -p /mnt/img/data/config
     cat > /mnt/img/data/config/ceti-config.txt <<EOF
 # Depth-Aware Burnwire Test Configuration
@@ -122,8 +123,24 @@ burn_depth_threshold=$BURN_DEPTH_THRESHOLD
 surface_pressure=$SURFACE_PRESSURE
 aprs_on_whale=false
 EOF
+
+    # ALSO write to LD_PRELOAD redirection target (for firmware to actually read)
+    # Firmware opens /data/config/ceti-config.txt which gets redirected to /tmp/qemu_data/config/ceti-config.txt
+    mkdir -p /tmp/qemu_data/config
+    cat > /tmp/qemu_data/config/ceti-config.txt <<EOF
+# Depth-Aware Burnwire Test Configuration
+timeout_s=$TIMEOUT_S
+burn_interval_s=$BURN_INTERVAL_S
+burn_depth_threshold=$BURN_DEPTH_THRESHOLD
+surface_pressure=$SURFACE_PRESSURE
+aprs_on_whale=false
+EOF
+
     echo 'Configuration injected:'
     cat /mnt/img/data/config/ceti-config.txt
+    echo ''
+    echo 'Config also copied to LD_PRELOAD redirection path:'
+    cat /tmp/qemu_data/config/ceti-config.txt
 "
 
 # Start firmware
