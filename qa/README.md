@@ -2,27 +2,24 @@
 
 This directory contains the complete QA testing infrastructure for whale tag firmware, enabling **end-to-end testing without physical hardware** using LD_PRELOAD sensor simulation and QEMU ARM64 emulation.
 
+## Documentation
+
+📖 **[QA_TESTING_GUIDE.md](QA_TESTING_GUIDE.md)** - **START HERE** - Complete testing guide with setup, workflows, and troubleshooting
+
 ## Quick Start
 
-### Run End-to-End Test
-
 ```bash
-./qa/e2e-test.sh
-```
+# 1. Build SD card image (requires interactive terminal for sudo)
+make build
 
-This will:
-1. Build Docker container with QEMU and dependencies
-2. Mount the SD card image using kpartx
-3. Run cetiTagApp with LD_PRELOAD sensor simulation
-4. Display output showing all intercepted GPIO/I2C calls
+# 2. Expand image for testing (one-time setup)
+sudo ./qa/expand_image.sh
 
-**Expected Output:**
-```
-[LD_PRELOAD] gpioInitialise() - Starting simulation
-[LD_PRELOAD] Network control listening on UDP port 9999
-[LD_PRELOAD] gpioSetMode(gpio=17, mode=1)
-[LD_PRELOAD] gpioWrite(gpio=17, level=1)
-...
+# 3. Build LD_PRELOAD library
+cd qa/libpigpio_sim && make arm64
+
+# 4. Run complete E2E test
+./test_prs_complete_e2e.sh
 ```
 
 ## What's Included
@@ -31,22 +28,19 @@ This will:
 
 | File/Directory | Purpose |
 |----------------|---------|
-| `e2e-test.sh` | **Main test script** - Automated end-to-end testing |
+| `QA_TESTING_GUIDE.md` | **Main documentation** - Complete testing guide |
 | `libpigpio_sim/` | **LD_PRELOAD library** - Simulates all hardware sensors |
-| `E2E_SUCCESS.md` | Test results and architecture documentation |
-| `HOW_TO_TEST.md` | Step-by-step testing instructions |
-| `Dockerfile.e2e` | Multistage Docker image for E2E testing |
+| `expand_image.sh` | Utility to expand SD card image for testing |
+| `resize_filesystem.sh` | Helper to resize filesystems on expanded partitions |
+| `test_prs_complete_e2e.sh` | Complete E2E test for PRs #111 and #112 |
+| `depth_simulation_test.sh` | Simple depth simulation script |
 
 ### Documentation
 
-- **E2E_SUCCESS.md** - Proof of successful end-to-end test with output samples
-- **E2E_TEST_SUMMARY.md** - Complete testing summary and approach comparison
-- **HOW_TO_TEST.md** - Multiple testing approaches (QEMU, Docker, Raspberry Pi)
-
-### Test Configurations
-
-- `test_configs/` - Sample configuration files for different test scenarios
-- `test_scripts/` - Additional test utilities
+- **QA_TESTING_GUIDE.md** - **Main guide** - Complete setup and workflow documentation
+- **libpigpio_sim/README.md** - LD_PRELOAD library implementation details
+- **E2E_SUCCESS.md** - Historical proof of concept (reference only)
+- **E2E_TEST_SUMMARY.md** - Historical testing approach comparison (reference only)
 
 ## How It Works
 
@@ -94,17 +88,42 @@ The LD_PRELOAD library listens on **UDP port 9999** for runtime sensor control:
 
 ```bash
 # Simulate dive to 10m depth
-echo 'DEPTH=10' | nc -u -w1 localhost 9999
+echo 'DEPTH=10' | nc -u -w1 127.0.0.1 9999
 
 # Change water temperature
-echo 'TEMP=15' | nc -u -w1 localhost 9999
+echo 'TEMP=15' | nc -u -w1 127.0.0.1 9999
 
 # Simulate darkness (underwater)
-echo 'LIGHT=0' | nc -u -w1 localhost 9999
+echo 'LIGHT=0' | nc -u -w1 127.0.0.1 9999
 
 # Set battery voltage
-echo 'BATTERY=3.5' | nc -u -w1 localhost 9999
+echo 'BATTERY=3.5' | nc -u -w1 127.0.0.1 9999
 ```
+
+**Note:** Use `127.0.0.1` when running in Docker, or `localhost` when testing locally.
+
+## LD_PRELOAD Development Workflow
+
+**Feature Branch:** `qa/ld-preload-dev`
+**Testing Branch:** `qa/testing-environment`
+
+```bash
+# 1. Work on feature branch
+git checkout qa/ld-preload-dev
+# Edit qa/libpigpio_sim/libpigpio_sim.c
+cd qa/libpigpio_sim && make clean && make arm64
+git commit -am "Add new pigpio function"
+
+# 2. Merge to testing environment
+git checkout qa/testing-environment
+git merge qa/ld-preload-dev --no-edit
+cd qa/libpigpio_sim && make clean && make arm64
+
+# 3. Run tests
+./test_prs_complete_e2e.sh
+```
+
+See **QA_TESTING_GUIDE.md** for detailed workflow.
 
 ## Building
 
@@ -135,250 +154,75 @@ Output:
 
 ## Testing Scenarios
 
-### Test Use Case Preparation
+See **[QA_TESTING_GUIDE.md](QA_TESTING_GUIDE.md)** for complete testing scenarios including:
 
-The e2e-test.sh script handles all the setup automatically:
+- PR #111: Depth-Aware Burnwire Control
+- PR #112: APRS On Whale Configuration
+- Dive simulations
+- Battery low scenarios
 
-1. **Image Preparation**
-   - Uses `kpartx` to map SD card partitions
-   - Mounts root filesystem to `/mnt/img`
-   - No modification needed - read-only mounting works
-
-2. **LD_PRELOAD Setup**
-   - ARM64 library passed via `-E LD_PRELOAD=...` to QEMU
-   - Library is accessed from host filesystem via bind mount
-   - No need to install into image - dynamic linker finds it
-
-3. **QEMU Execution**
-   - `qemu-aarch64-static -L /mnt/img` uses image as root
-   - ARM64 binaries execute transparently
-   - All library dependencies resolved from mounted image
-
-### Scenario 1: Basic Sensor Reading
+### Quick Test Example
 
 ```bash
-# Run firmware with default sensor values
-TIMEOUT=30 ./qa/e2e-test.sh
+# Run complete E2E test
+./test_prs_complete_e2e.sh
 
-# Expected: Firmware initializes, reads sensors, logs data
-```
-
-### Scenario 2: Dive Simulation
-
-```bash
-# Start firmware in background
-docker run --rm --privileged -d --name qa-dive-test \
-  -v $(pwd):/work -w /work debian:bookworm \
-  bash -c "
-    apt-get update -qq && apt-get install -y -qq qemu-user-static kpartx netcat-openbsd file
-    kpartx -av /work/out/sdcard.img
-    LOOP=\$(kpartx -av /work/out/sdcard.img | head -1 | grep -oP 'loop\d+')
-    mkdir -p /mnt/img
-    mount /dev/mapper/\${LOOP}p2 /mnt/img
-    qemu-aarch64-static -L /mnt/img \
-      -E LD_PRELOAD=/work/qa/libpigpio_sim/build/libpigpio_sim_arm64.so \
-      /mnt/img/opt/ceti-tag-data-capture/bin/cetiTagApp
-  "
-
-# Simulate dive sequence
-sleep 5
-echo 'DEPTH=0.5' | docker exec -i qa-dive-test nc -u -w1 localhost 9999
-sleep 10
-echo 'DEPTH=5' | docker exec -i qa-dive-test nc -u -w1 localhost 9999
-sleep 30
-echo 'DEPTH=15' | docker exec -i qa-dive-test nc -u -w1 localhost 9999
-sleep 60
-echo 'DEPTH=0.5' | docker exec -i qa-dive-test nc -u -w1 localhost 9999
-
-# Check logs
-docker exec qa-dive-test cat /mnt/img/data/data_pressure_temperature.csv
-
-# Cleanup
-docker stop qa-dive-test
-```
-
-### Scenario 3: APRS On Whale Testing
-
-Test the `aprs_on_whale` feature (Issue #107):
-
-```bash
-# 1. Enable aprs_on_whale in config
-mkdir -p test_data/config
-echo 'aprs_on_whale=true' > test_data/config/ceti-config.txt
-
-# 2. Run with custom config bind mount
-docker run --rm --privileged \
-  -v $(pwd):/work -v $(pwd)/test_data:/data \
-  -w /work debian:bookworm \
-  bash -c "
-    apt-get update -qq && apt-get install -y -qq qemu-user-static kpartx
-    kpartx -av /work/out/sdcard.img
-    LOOP=\$(kpartx -av /work/out/sdcard.img | head -1 | grep -oP 'loop\d+')
-    mkdir -p /mnt/img
-    mount /dev/mapper/\${LOOP}p2 /mnt/img
-    qemu-aarch64-static -L /mnt/img \
-      -E LD_PRELOAD=/work/qa/libpigpio_sim/build/libpigpio_sim_arm64.so \
-      /mnt/img/opt/ceti-tag-data-capture/bin/cetiTagApp
-  "
-
-# 3. Control depth to trigger recovery board behavior
-echo 'DEPTH=0.5' | nc -u -w1 localhost 9999  # At surface - GPS should activate
-echo 'DEPTH=5' | nc -u -w1 localhost 9999    # Underwater - GPS should sleep
+# Or run with custom depth simulation
+docker exec pr-e2e-complete bash -c 'echo "DEPTH=10" | nc -u -w1 127.0.0.1 9999'
 ```
 
 ## Troubleshooting
 
-### "No space left on device" in /tmp
+Common issues and solutions are documented in **[QA_TESTING_GUIDE.md](QA_TESTING_GUIDE.md#common-issues-and-solutions)**, including:
 
-**Cause:** Docker container's /tmp is too small for bind mounts
+- "No space left on device" → Run `sudo ./qa/expand_image.sh`
+- "pigpio uninitialised" errors → Add missing functions to LD_PRELOAD library
+- kpartx/loop device failures → Clean up stale containers
+- Image corruption → Restore from `out/sdcard.img.backup`
 
-**Solution:** Use kpartx + mount instead of rpi-image bind mounts (already implemented in e2e-test.sh)
+## Key Technical Notes
 
-### "LD_PRELOAD cannot be preloaded"
-
-**Cause:** Library path is incorrect or architecture mismatch
-
-**Solutions:**
-1. Verify library exists: `ls -lh qa/libpigpio_sim/build/libpigpio_sim_arm64.so`
-2. Check architecture: `file qa/libpigpio_sim/build/libpigpio_sim_arm64.so` (should say "ARM aarch64")
-3. Ensure absolute path is used in LD_PRELOAD
-
-### "Permission denied" mounting loop devices
-
-**Cause:** Docker container needs privileged mode
-
-**Solution:** Always use `--privileged` flag with docker run
-
-### Test hangs or times out
-
-**Cause:** Firmware waiting for user input or stuck in initialization
-
-**Solutions:**
-1. Use `timeout` command to limit execution time
-2. Check if `/data` partition is mounted (firmware requires it)
-3. Review logs for errors
-
-## Development
-
-### Adding New Sensor Simulations
-
-1. Edit `qa/libpigpio_sim/libpigpio_sim.c`
-2. Add sensor state to `SimState` struct
-3. Implement I2C read/write handlers for sensor's I2C address
-4. Add network control commands in `process_command()`
-5. Rebuild: `cd qa/libpigpio_sim && make arm64`
-
-Example:
-```c
-// Add to SimState
-double new_sensor_value;
-
-// Add to i2cReadDevice handler
-case 0x50:  // New sensor at I2C address 0x50
-    uint16_t raw_value = (uint16_t)(g_sim_state.new_sensor_value * 100);
-    buf[0] = raw_value & 0xFF;
-    buf[1] = (raw_value >> 8) & 0xFF;
-    break;
-
-// Add to process_command
-if (strncmp(cmd, "NEWSENSOR=", 10) == 0) {
-    g_sim_state.new_sensor_value = atof(cmd + 10);
-}
-```
-
-### Running Tests on Real Hardware
-
-Once simulation testing is complete, deploy to Raspberry Pi:
-
-```bash
-# 1. Build packages
-make packages
-
-# 2. Copy to Pi
-scp out/ceti-tag-data-capture_*.deb pi@raspberrypi:~
-scp qa/libpigpio_sim/build/libpigpio_sim.so pi@raspberrypi:~
-
-# 3. Install and test
-ssh pi@raspberrypi
-sudo dpkg -i ceti-tag-data-capture_*.deb
-LD_PRELOAD=./libpigpio_sim.so /opt/ceti-tag-data-capture/bin/cetiTagApp
-
-# 4. Control sensors from another terminal
-echo 'DEPTH=10' | nc -u -w1 raspberrypi 9999
-```
-
-## Technical Notes
-
-### Why kpartx Instead of rpi-image?
-
-`rpi-image run` creates temporary mounts that don't persist between invocations. For LD_PRELOAD testing, we need:
-
-1. Persistent filesystem mount (kpartx provides this)
-2. LD_PRELOAD library accessible to dynamic linker (via QEMU -E flag)
-3. No image modification needed (read-only mount works)
-
-### Why QEMU User-Mode Instead of System Emulation?
-
-**User-mode advantages:**
-- Faster startup (no full system boot)
-- Direct access to host filesystem
-- Easy integration with Docker
-- Simpler debugging
-
-**System emulation would require:**
-- Full ARM64 kernel boot
-- Network configuration
-- More complex setup
-- Slower execution
-
-User-mode is perfect for testing application logic without full system simulation.
-
-### Library Interception Order
+### LD_PRELOAD Library Interception
 
 ```
-cetiTagApp calls gpioSetMode()
+cetiTagApp → gpioSetMode()
     ↓
 Dynamic linker checks LD_PRELOAD
     ↓
-libpigpio_sim.so::gpioSetMode() executes (intercepted!)
+libpigpio_sim.so::gpioSetMode() (intercepted!)
     ↓
 Returns simulated result
 ```
 
 The real `libpigpio.so` is never called - our simulation completely replaces it.
 
-## CI/CD Integration
+### Why kpartx?
 
-### GitHub Actions Example
+- `rpi-image run` creates temporary mounts (changes don't persist)
+- kpartx provides persistent loop device mounts
+- Allows LD_PRELOAD library access via QEMU -E flag
+- No image modification needed
 
-```yaml
-name: QA Tests
-on: [pull_request]
+### Why QEMU User-Mode?
 
-jobs:
-  e2e-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Build firmware
-        run: make packages
-      - name: Build LD_PRELOAD library
-        run: cd qa/libpigpio_sim && make arm64
-      - name: Run E2E tests
-        run: ./qa/e2e-test.sh
-```
+- ✅ Fast startup (no full system boot)
+- ✅ Direct host filesystem access
+- ✅ Simple Docker integration
+- ❌ System emulation would require kernel boot, networking, etc.
 
-## Related Documentation
+## Documentation Index
 
-- **E2E_SUCCESS.md** - Proof of successful testing with full output
-- **E2E_TEST_SUMMARY.md** - Complete testing approach analysis
-- **HOW_TO_TEST.md** - Alternative testing methods (Pi hardware, manual QEMU)
-- **libpigpio_sim/README.md** - LD_PRELOAD library implementation details
+| Document | Purpose |
+|----------|---------|
+| **QA_TESTING_GUIDE.md** | **START HERE** - Complete testing guide |
+| README.md | This file - Overview and quick reference |
+| libpigpio_sim/README.md | LD_PRELOAD library implementation |
+| E2E_SUCCESS.md | Historical proof of concept |
+| E2E_TEST_SUMMARY.md | Historical approach comparison |
 
 ## Support
 
-For issues or questions:
-1. Check documentation in this directory
-2. Review test output logs
-3. Examine LD_PRELOAD library source code
-4. Test on real Raspberry Pi hardware if QEMU issues persist
+1. Read **[QA_TESTING_GUIDE.md](QA_TESTING_GUIDE.md)**
+2. Check test output logs
+3. Review LD_PRELOAD library source code
+4. Consult CLAUDE.md for build system questions
