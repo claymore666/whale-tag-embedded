@@ -41,6 +41,8 @@ static SimState g_sim_state = {
 static pthread_mutex_t g_sim_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int g_udp_socket = -1;
 static int g_gpio_initialized = 0;
+static int g_bbi2c_open = 0;  // Track if bit-bang I2C is open
+static uint8_t g_bbi2c_addr = 0;  // Current I2C address for bit-bang operations
 
 // RTC counter thread - increments counter every second
 static void* rtc_counter_thread(void* arg) {
@@ -432,30 +434,112 @@ int serWrite(unsigned handle, char *buf, unsigned count) {
 // Bit-bang I2C (for BNO086 IMU)
 int bbI2COpen(unsigned SDA, unsigned SCL, unsigned baud) {
     fprintf(stderr, "[LD_PRELOAD] bbI2COpen(SDA=%u, SCL=%u, baud=%u)\n", SDA, SCL, baud);
-    return SDA;  // Return fake handle (use SDA pin number)
+    g_bbi2c_open = 1;
+    g_bbi2c_addr = 0;
+    return 0;  // Success
 }
 
 int bbI2CClose(unsigned SDA) {
     fprintf(stderr, "[LD_PRELOAD] bbI2CClose(SDA=%u)\n", SDA);
+    g_bbi2c_open = 0;
+    g_bbi2c_addr = 0;
     return 0;  // Success
 }
 
 int bbI2CZip(unsigned SDA, char *inBuf, unsigned inLen, char *outBuf, unsigned outLen) {
     fprintf(stderr, "[LD_PRELOAD] bbI2CZip(SDA=%u, inLen=%u, outLen=%u)\n", SDA, inLen, outLen);
 
-    // Simulate BNO086 IMU responses (basic SHTP protocol)
-    if (outBuf && outLen > 0) {
-        // Return fake SHTP header or sensor data
-        memset(outBuf, 0, outLen);
-        if (outLen >= 4) {
-            outBuf[0] = outLen & 0xFF;        // Packet length LSB
-            outBuf[1] = (outLen >> 8) & 0xFF; // Packet length MSB
-            outBuf[2] = 0x00;                 // Channel number
-            outBuf[3] = 0x00;                 // Sequence number
+    // Parse command buffer and execute I2C operations
+    unsigned i = 0;
+    unsigned bytes_read = 0;
+    int in_transaction = 0;
+
+    while (i < inLen) {
+        uint8_t cmd = (uint8_t)inBuf[i++];
+
+        switch (cmd) {
+            case 0x00:  // End
+                fprintf(stderr, "[LD_PRELOAD]   CMD: END\n");
+                goto done;
+
+            case 0x01:  // Escape (next parameter is 2 bytes)
+                fprintf(stderr, "[LD_PRELOAD]   CMD: ESCAPE\n");
+                // Next command will use 2-byte parameter
+                break;
+
+            case 0x02:  // Start condition
+                fprintf(stderr, "[LD_PRELOAD]   CMD: START (addr=0x%02X)\n", g_bbi2c_addr);
+                in_transaction = 1;
+                break;
+
+            case 0x03:  // Stop condition
+                fprintf(stderr, "[LD_PRELOAD]   CMD: STOP\n");
+                in_transaction = 0;
+                break;
+
+            case 0x04:  // Set address
+                if (i < inLen) {
+                    g_bbi2c_addr = (uint8_t)inBuf[i++];
+                    fprintf(stderr, "[LD_PRELOAD]   CMD: SET_ADDR 0x%02X\n", g_bbi2c_addr);
+                }
+                break;
+
+            case 0x05:  // Set flags
+                if (i + 1 < inLen) {
+                    uint16_t flags = ((uint8_t)inBuf[i]) | (((uint8_t)inBuf[i+1]) << 8);
+                    i += 2;
+                    fprintf(stderr, "[LD_PRELOAD]   CMD: SET_FLAGS 0x%04X\n", flags);
+                }
+                break;
+
+            case 0x06:  // Read bytes
+                if (i + 1 < inLen) {
+                    uint16_t read_len = ((uint8_t)inBuf[i]) | (((uint8_t)inBuf[i+1]) << 8);
+                    i += 2;
+                    fprintf(stderr, "[LD_PRELOAD]   CMD: READ %u bytes from 0x%02X\n", read_len, g_bbi2c_addr);
+
+                    // Simulate IMU (BNO086) responses
+                    if (outBuf && bytes_read + read_len <= outLen) {
+                        if (g_bbi2c_addr == 0x4A || g_bbi2c_addr == 0x4B) {
+                            // BNO086 IMU - return SHTP packet header format
+                            // First 4 bytes are always the packet header
+                            if (read_len >= 4) {
+                                outBuf[bytes_read + 0] = 0xFF;  // Length LSB (0xFFFF = no data available)
+                                outBuf[bytes_read + 1] = 0xFF;  // Length MSB
+                                outBuf[bytes_read + 2] = 0x00;  // Channel
+                                outBuf[bytes_read + 3] = 0x00;  // Sequence
+                                // Fill rest with zeros
+                                for (unsigned j = 4; j < read_len; j++) {
+                                    outBuf[bytes_read + j] = 0x00;
+                                }
+                            }
+                        } else {
+                            // Unknown device - return zeros
+                            memset(&outBuf[bytes_read], 0, read_len);
+                        }
+                        bytes_read += read_len;
+                    }
+                }
+                break;
+
+            case 0x07:  // Write bytes
+                if (i < inLen) {
+                    uint8_t write_len = (uint8_t)inBuf[i++];
+                    fprintf(stderr, "[LD_PRELOAD]   CMD: WRITE %u bytes to 0x%02X\n", write_len, g_bbi2c_addr);
+                    // Skip the data bytes
+                    i += write_len;
+                }
+                break;
+
+            default:
+                fprintf(stderr, "[LD_PRELOAD]   CMD: UNKNOWN 0x%02X\n", cmd);
+                break;
         }
     }
 
-    return 0;  // Success
+done:
+    fprintf(stderr, "[LD_PRELOAD]   Returned %u bytes\n", bytes_read);
+    return bytes_read;  // Return number of bytes read
 }
 
 // SPI simulation (for FPGA/audio)
