@@ -227,6 +227,91 @@ echo 'BATTERY=3.5' | nc -u -w1 127.0.0.1 9999 # Low battery (3.5V)
 echo 'BATTERY=4.2' | nc -u -w1 127.0.0.1 9999 # Full charge (4.2V)
 ```
 
+## Simulation Fidelity Levels
+
+The LD_PRELOAD library simulates hardware at three different fidelity levels depending on testing requirements:
+
+### 🟢 Level 1: Realistic Simulation (Full Protocol + Physics)
+
+Devices with complete protocol implementation and proper data conversion:
+
+| Device | I2C Address | Key Features | Dynamic Control |
+|--------|-------------|--------------|-----------------|
+| **Keller 4LD Pressure** | 0x40, 0x44 | MSR protocol with 0xAC measurement trigger, 16-bit signed conversion with proper scale factor (200 bar / 32768), realistic timing | ✅ UDP `DEPTH=X.X` |
+| **MAX17320 Battery** | 0x36, 0x0b | Complete register map (11+ registers), LSB scaling per datasheet (voltage: 0.000078125 V, current: 1.5625 µV, temp: 1/256 °C, SOC: 1/256 %), dual I2C address ranges | ✅ UDP `BATTERY=X.X` |
+| **RTC Clock** | 0x68 | 32-bit counter with background thread, auto-increments every second, little-endian 4-byte read, initialized to Unix timestamp | ❌ Auto-managed |
+| **IOX GPIO Expander** | 0x21 | Full register state (INPUT, OUTPUT, CONFIG, POLARITY, etc.), 8-pin tracking, burnwire control on pin 4 | ❌ Reflects firmware writes |
+
+**Why Realistic:**
+- Pressure sensor requires measurement trigger command before valid data (protocol compliance)
+- Battery gauge uses actual LSB conversions from MAX17320 datasheet (prevents voltage misreads)
+- RTC maintains real running time (mission timestamps)
+- IOX tracks all register states (power management)
+
+### 🟡 Level 2: Basic Simulation (Simple Value Returns)
+
+Devices with simplified implementations that return valid data without full protocol:
+
+| Device | I2C Address | Implementation | Dynamic Control |
+|--------|-------------|----------------|-----------------|
+| **LTR-329ALS Light** | 0x29 | Returns 16-bit lux value directly, no register protocol | ✅ UDP `LIGHT=XXX` |
+| **BNO086 IMU** | 0x4A, 0x4B | bbI2CZip command parser, always returns "no data" (length=0) to prevent blocking | ❌ No data provided |
+| **FPGA Loading** | GPIO 20/21/27 | Fast-forward: counts 50 operations then asserts FPGA_DONE, skips ~19.4M operations (~30min-54hr) | ❌ Auto-complete |
+| **GPIO Pins** | Various | State array tracking, FPGA_DONE has special logic | ❌ Reflects firmware writes |
+
+**Why Basic:**
+- Light sensor doesn't need complex protocol (simple lux reading)
+- IMU returns "no data" to prevent firmware busy-waiting (not critical for non-motion tests)
+- FPGA fast-forward skips bitstream loading delay (development efficiency)
+- GPIO provides state persistence (minimal logic needed)
+
+### 🔴 Level 3: Stub Only (Success Returns, No Functionality)
+
+Devices that return success codes but provide no actual data or functionality:
+
+| Interface | Functions | Behavior | Impact |
+|-----------|-----------|----------|--------|
+| **Serial UART** | serOpen, serRead, serWrite, serDataAvailable | Returns success, no data available | Recovery board (GPS/VHF) not simulated |
+| **SPI** | spiOpen, spiRead, spiWrite, spiXfer | Returns success, zero data | FPGA audio data not generated |
+
+**Why Stubbed:**
+- Serial: GPS NMEA parsing not required for basic state machine tests
+- SPI: Audio capture not critical for sensor/power management testing
+- Both prevent firmware errors while allowing other subsystems to function
+
+### Simulation Level Selection Criteria
+
+**Choose Level 1 (Realistic) when:**
+- Device behavior affects critical firmware decisions (battery voltage → shutdown, pressure → burnwire)
+- Protocol compliance is required for firmware to work (MSR measurement trigger)
+- Data conversion bugs could cause test failures (LSB scaling errors)
+
+**Choose Level 2 (Basic) when:**
+- Firmware needs valid data but protocol details don't matter (light sensor)
+- Device would block firmware progress if not responsive (IMU "no data")
+- Long delays need to be eliminated for test efficiency (FPGA bitstream)
+
+**Choose Level 3 (Stub) when:**
+- Subsystem is not under test (recovery board during sensor tests)
+- No data is better than incorrect data (audio samples)
+- Firmware can tolerate "device not ready" responses
+
+### Example: Why MAX17320 Required Level 1
+
+**Original Bug (Basic simulation):**
+```c
+result = (uint16_t)(g_sim_state.battery_voltage * 1000);  // Returns 3700 for 3.7V
+```
+Firmware conversion: `3700 * 0.000078125 = 0.289V` → **Critical voltage shutdown!**
+
+**Fixed (Realistic simulation):**
+```c
+raw_value = (uint16_t)(g_sim_state.battery_voltage / 0.000078125);  // Returns 47360 for 3.7V
+```
+Firmware conversion: `47360 * 0.000078125 = 3.7V` → **Correct voltage reading!**
+
+**Lesson:** Devices that control firmware state transitions need realistic simulation to prevent false failures.
+
 ## Implementation Status
 
 ### ✅ Fully Implemented
