@@ -208,6 +208,106 @@ Examples:
 - 10m: 2.0 bar
 - 15m: 2.5 bar
 
+## Firmware Logging System
+
+### Understanding CETI_LOG Output
+
+**Critical Discovery:** The firmware uses `syslog()` for logging, NOT stdout/stderr!
+
+```c
+// From logging.h:
+#define CETI_LOG(FMT_STR, ...) syslog(LOG_DEBUG, ...)
+```
+
+**Where logs go:**
+- **Bookworm (current):** `/data/journal/` (systemd-journald)
+- **Bullseye (upstream):** `/var/log/syslog` (rsyslog)
+- **NOT captured by:** stdout/stderr redirection in test scripts
+
+### Accessing Firmware Logs
+
+**Method 1: During test run (attach to running container)**
+```bash
+# Find container ID
+docker ps
+
+# Access journald logs
+docker exec -it <container_id> journalctl -f
+
+# Or access specific service
+docker exec -it <container_id> journalctl -u ceti-tag-data-capture -f
+
+# Or read from mounted /data/journal
+docker exec -it <container_id> ls -la /mnt/img/data/journal/
+```
+
+**Method 2: After test completes (mount image)**
+```bash
+# Mount image manually
+sudo kpartx -av out/sdcard.img
+sudo mount /dev/mapper/loopXp3 /mnt/test-data
+
+# Read journal logs
+sudo journalctl --directory=/mnt/test-data/journal/
+
+# Cleanup
+sudo umount /mnt/test-data
+sudo kpartx -dv out/sdcard.img
+```
+
+**Method 3: Extract logs in test script**
+```bash
+# Add to test script before cleanup
+docker exec pr-e2e-complete journalctl -u ceti-tag-data-capture --no-pager > firmware.log
+```
+
+### What LD_PRELOAD Shows vs. Firmware Logs
+
+**LD_PRELOAD output (visible in test logs):**
+- `[LD_PRELOAD]` prefixed messages
+- Hardware interface calls: `gpioWrite`, `i2cReadDevice`, `spiOpen`, etc.
+- Sensor simulation: pressure readings, I2C operations, GPIO states
+- FPGA bitstream fast-forward progress
+- Network control commands (UDP port 9999)
+
+**Firmware logs (hidden in syslog - requires journalctl):**
+- `CETI_LOG()` messages from application code
+- State machine transitions: `CONFIG → START → RECORD_SURFACE → BRN_ON`
+- Sensor initialization: pressure, battery, IMU, light
+- Configuration loading: `ceti-config.txt` parsing
+- Thread lifecycle: audio, battery, IMU, pressure threads starting
+- Burnwire activation logic and depth-aware decision making
+- Error conditions: sensor failures, low battery, disk full
+
+### Why Firmware Appears "Stuck"
+
+**The firmware IS running, logs are just hidden!**
+
+Evidence of operation even without visible CETI_LOG output:
+1. **Sensor polling patterns** - Regular I2C reads indicate active threads:
+   ```
+   [LD_PRELOAD] i2cReadDevice(handle=.../addr=0x40, count=5)  # Pressure sensor
+   [LD_PRELOAD] i2cReadByteData(handle=.../addr=0x21, reg=0x00)  # IOX (burnwire)
+   [LD_PRELOAD] bbI2CZip(SDA=2, inLen=..., outLen=4)  # IMU header read
+   ```
+
+2. **IOX register updates** - OUTPUT register changes show state machine activity:
+   ```
+   [LD_PRELOAD] IOX OUTPUT register: 0x10 (BURNWIRE_ON=1)
+   ```
+
+3. **Incrementing counters** - IMU read count shows continuous operation:
+   ```
+   [LD_PRELOAD] IMU: No data available (read #27354)
+   ```
+
+4. **CSV file writes** - Data files appear in `/mnt/img/data/`:
+   - `data_pressure_temperature.csv`
+   - `data_battery.csv`
+   - `data_state.csv`
+
+**To verify state machine progression, access journald logs using methods above.**
+
 ## Test Architecture
 
 ```
