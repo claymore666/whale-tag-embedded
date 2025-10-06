@@ -1,149 +1,226 @@
-# Whale Tag QA Testing Infrastructure
+# QA Testing Environment
 
-This directory contains testing infrastructure for whale tag firmware using LD_PRELOAD simulation.
+This directory contains the complete QA testing infrastructure for whale tag firmware, enabling **end-to-end testing without physical hardware** using LD_PRELOAD sensor simulation and QEMU ARM64 emulation.
+
+## Documentation
+
+📖 **[QA_TESTING_GUIDE.md](QA_TESTING_GUIDE.md)** - **START HERE** - Complete testing guide with setup, workflows, and troubleshooting
 
 ## Quick Start
 
-### 1. Build LD_PRELOAD Library
+```bash
+# 1. Build SD card image (requires interactive terminal for sudo)
+make build
+
+# 2. Expand image for testing (one-time setup)
+sudo ./qa/expand_image.sh
+
+# 3. Build LD_PRELOAD library
+cd qa/libpigpio_sim && make arm64
+
+# 4. Run complete E2E test
+./test_prs_complete_e2e.sh
+```
+
+## What's Included
+
+### Core Components
+
+| File/Directory | Purpose |
+|----------------|---------|
+| `QA_TESTING_GUIDE.md` | **Main documentation** - Complete testing guide |
+| `libpigpio_sim/` | **LD_PRELOAD library** - Simulates all hardware sensors |
+| `expand_image.sh` | Utility to expand SD card image for testing |
+| `resize_filesystem.sh` | Helper to resize filesystems on expanded partitions |
+| `test_prs_complete_e2e.sh` | Complete E2E test for PRs #111 and #112 |
+| `depth_simulation_test.sh` | Simple depth simulation script |
+
+### Documentation
+
+- **QA_TESTING_GUIDE.md** - **Main guide** - Complete setup and workflow documentation
+- **HARDWARE_SIMULATION.md** - Hardware interface mapping and simulation reference
+- **libpigpio_sim/README.md** - LD_PRELOAD library implementation details
+
+## How It Works
+
+### Architecture
+
+```
+┌─────────────────────────────────────────┐
+│  Docker Container (Privileged)          │
+│                                          │
+│  ┌────────────────────────────────────┐ │
+│  │  kpartx                            │ │
+│  │  Maps SD card image partitions    │ │
+│  │  /dev/mapper/loopXp2 → /mnt/img   │ │
+│  └────────────────────────────────────┘ │
+│                                          │
+│  ┌────────────────────────────────────┐ │
+│  │  QEMU User-Mode (qemu-aarch64)    │ │
+│  │  - Executes ARM64 binaries         │ │
+│  │  - LD_PRELOAD=libpigpio_sim.so     │ │
+│  │  - Intercepts pigpio library calls │ │
+│  └────────────────────────────────────┘ │
+│                                          │
+│  ┌────────────────────────────────────┐ │
+│  │  cetiTagApp (ARM64 firmware)      │ │
+│  │  - Believes it's on real hardware  │ │
+│  │  - All sensors simulated           │ │
+│  └────────────────────────────────────┘ │
+└─────────────────────────────────────────┘
+```
+
+### LD_PRELOAD Sensor Simulation
+
+The `libpigpio_sim` library intercepts all pigpio calls and simulates:
+
+- **Pressure Sensor** (Keller 4LD at I2C 0x40)
+- **Battery Gauge** (MAX17320 at I2C 0x36)
+- **Light Sensor** (LTR-329ALS at I2C 0x29)
+- **IMU** (BNO086 at I2C 0x4A/0x4B)
+- **GPIO** pins (all modes and states)
+- **SPI** devices (FPGA communication)
+
+### Network Control
+
+The LD_PRELOAD library listens on **UDP port 9999** for runtime sensor control:
 
 ```bash
-# The LD_PRELOAD library comes from qa/ld-preload-dev branch
-# It will be available after merging that branch into your test branch
+# Simulate dive to 10m depth
+echo 'DEPTH=10' | nc -u -w1 127.0.0.1 9999
 
+# Change water temperature
+echo 'TEMP=15' | nc -u -w1 127.0.0.1 9999
+
+# Simulate darkness (underwater)
+echo 'LIGHT=0' | nc -u -w1 127.0.0.1 9999
+
+# Set battery voltage
+echo 'BATTERY=3.5' | nc -u -w1 127.0.0.1 9999
+```
+
+**Note:** Use `127.0.0.1` when running in Docker, or `localhost` when testing locally.
+
+## LD_PRELOAD Development Workflow
+
+**Feature Branch:** `qa/ld-preload-dev`
+**Testing Branch:** `qa/testing-environment`
+
+```bash
+# 1. Work on feature branch
+git checkout qa/ld-preload-dev
+# Edit qa/libpigpio_sim/libpigpio_sim.c
+cd qa/libpigpio_sim && make clean && make arm64
+git commit -am "Add new pigpio function"
+
+# 2. Merge to testing environment
+git checkout qa/testing-environment
+git merge qa/ld-preload-dev --no-edit
+cd qa/libpigpio_sim && make clean && make arm64
+
+# 3. Run tests
+./test_prs_complete_e2e.sh
+```
+
+See **QA_TESTING_GUIDE.md** for detailed workflow.
+
+## Building
+
+### Build LD_PRELOAD Library
+
+```bash
 cd qa/libpigpio_sim
-make
+make              # Build for x86_64 (local testing)
+make arm64        # Cross-compile for ARM64 (Pi/QEMU)
 ```
 
-### 2. Run Tests
+Output:
+- `build/libpigpio_sim.so` - x86_64 version
+- `build/libpigpio_sim_arm64.so` - ARM64 version
+
+### Build Firmware
+
+From repository root:
 
 ```bash
-# Terminal 1: Start firmware with LD_PRELOAD
-LD_PRELOAD=./qa/libpigpio_sim/build/libpigpio_sim.so \
-  /opt/ceti-tag-data-capture/bin/cetiTagApp
-
-# Terminal 2: Run test scripts
-cd qa/test_scripts
-python3 test_aprs_on_whale.py
+make packages     # Build Debian packages
+make build        # Build complete SD card image
 ```
 
-## Directory Structure
+Output:
+- `out/ceti-tag-data-capture_*.deb` - Firmware package
+- `out/sdcard.img` - Bootable SD card image
 
-```
-qa/
-├─ libpigpio_sim/          # LD_PRELOAD simulation library (from qa/ld-preload-dev)
-│  ├─ libpigpio_sim.c
-│  ├─ Makefile
-│  └─ README.md
-│
-├─ test_scripts/           # Test automation scripts
-│  ├─ test_aprs_on_whale.py
-│  └─ common/              # Shared test utilities
-│
-├─ test_configs/           # Test configuration files
-│  ├─ aprs_disabled.txt
-│  └─ aprs_enabled.txt
-│
-└─ docs/                   # QA documentation
-   ├─ TESTING_GUIDE.md
-   └─ LD_PRELOAD_DEVELOPMENT.md
-```
+## Testing Scenarios
 
-## Available Tests
+See **[QA_TESTING_GUIDE.md](QA_TESTING_GUIDE.md)** for complete testing scenarios including:
 
-### test_aprs_on_whale.py
+- PR #111: Depth-Aware Burnwire Control
+- PR #112: APRS On Whale Configuration
+- Dive simulations
+- Battery low scenarios
 
-Tests APRS on whale feature (Issue #109, PR #112):
-- Recovery board sleeps when `aprs_on_whale=false` at surface
-- Recovery board wakes when `aprs_on_whale=true` at surface
-- Complete dive sequence simulation
-
-**Usage:**
-```bash
-python3 test_scripts/test_aprs_on_whale.py
-```
-
-## Network Control
-
-The LD_PRELOAD library listens on UDP port 9999 for sensor control:
+### Quick Test Example
 
 ```bash
-# Set depth (meters)
-echo 'DEPTH=10' | nc -u -w1 localhost 9999
+# Run complete E2E test
+./test_prs_complete_e2e.sh
 
-# Set temperature (Celsius)
-echo 'TEMP=15' | nc -u -w1 localhost 9999
-
-# Set light (lux)
-echo 'LIGHT=500' | nc -u -w1 localhost 9999
-
-# Set battery (volts)
-echo 'BATTERY=3.6' | nc -u -w1 localhost 9999
+# Or run with custom depth simulation
+docker exec pr-e2e-complete bash -c 'echo "DEPTH=10" | nc -u -w1 127.0.0.1 9999'
 ```
-
-## Creating New Tests
-
-1. Create Python script in `test_scripts/`
-2. Use `WhaleTagSimulator` class for sensor control
-3. Run firmware with LD_PRELOAD
-4. Verify behavior in logs
-
-Example:
-```python
-from common.whale_tag_sim import WhaleTagSimulator
-
-def test_my_feature():
-    sim = WhaleTagSimulator()
-    sim.set_depth(10)  # 10m depth
-    time.sleep(5)
-    # Check logs for expected behavior
-    sim.close()
-```
-
-## Limitations
-
-LD_PRELOAD simulation tests **software logic only**:
-- ✅ State machine behavior
-- ✅ Config parsing
-- ✅ Integration between components
-- ✅ Thread coordination
-
-It does **NOT** test:
-- ❌ Real hardware timing
-- ❌ I2C bus errors
-- ❌ Power consumption
-- ❌ FPGA behavior
-
-**Hardware validation is still required before deployment!**
 
 ## Troubleshooting
 
-### Port 9999 already in use
-```bash
-# Find process using port 9999
-lsof -i :9999
-# Kill it or use different port
+Common issues and solutions are documented in **[QA_TESTING_GUIDE.md](QA_TESTING_GUIDE.md#common-issues-and-solutions)**, including:
+
+- "No space left on device" → Run `sudo ./qa/expand_image.sh`
+- "pigpio uninitialised" errors → Add missing functions to LD_PRELOAD library
+- kpartx/loop device failures → Clean up stale containers
+- Image corruption → Restore from `out/sdcard.img.backup`
+
+## Key Technical Notes
+
+### LD_PRELOAD Library Interception
+
+```
+cetiTagApp → gpioSetMode()
+    ↓
+Dynamic linker checks LD_PRELOAD
+    ↓
+libpigpio_sim.so::gpioSetMode() (intercepted!)
+    ↓
+Returns simulated result
 ```
 
-### LD_PRELOAD not intercepting functions
-```bash
-# Check library is loaded
-LD_DEBUG=libs LD_PRELOAD=./qa/libpigpio_sim/build/libpigpio_sim.so cetiTagApp 2>&1 | grep libpigpio_sim
+The real `libpigpio.so` is never called - our simulation completely replaces it.
 
-# Verify symbols are exported
-nm -D qa/libpigpio_sim/build/libpigpio_sim.so | grep gpio
-```
+### Why kpartx?
 
-### Firmware crashes
-```bash
-# Run with verbose LD_PRELOAD logging
-LD_PRELOAD=./qa/libpigpio_sim/build/libpigpio_sim.so cetiTagApp 2>&1 | tee firmware.log
-```
+- `rpi-image run` creates temporary mounts (changes don't persist)
+- kpartx provides persistent loop device mounts
+- Allows LD_PRELOAD library access via QEMU -E flag
+- No image modification needed
 
-## Branch Strategy
+### Why QEMU User-Mode?
 
-This QA infrastructure lives in `qa/testing-environment` branch:
-- **Never** merged to `main`
-- **Never** pushed to upstream (Project-CETI)
-- Only used in your fork for testing before PR submission
+- ✅ Fast startup (no full system boot)
+- ✅ Direct host filesystem access
+- ✅ Simple Docker integration
+- ❌ System emulation would require kernel boot, networking, etc.
 
-See `../QA_ENVIRONMENT_PLAN.md` for complete workflow.
+## Documentation Index
+
+| Document | Purpose |
+|----------|---------|
+| **QA_TESTING_GUIDE.md** | **START HERE** - Complete testing guide |
+| **HARDWARE_SIMULATION.md** | Hardware interface reference (I2C, GPIO, sensors) |
+| README.md | This file - Overview and quick reference |
+| libpigpio_sim/README.md | LD_PRELOAD library implementation |
+
+## Support
+
+1. Read **[QA_TESTING_GUIDE.md](QA_TESTING_GUIDE.md)**
+2. Check test output logs
+3. Review LD_PRELOAD library source code
+4. Consult CLAUDE.md for build system questions
