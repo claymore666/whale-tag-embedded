@@ -43,6 +43,7 @@ static int g_udp_socket = -1;
 static int g_gpio_initialized = 0;
 static int g_bbi2c_open = 0;  // Track if bit-bang I2C is open
 static uint8_t g_bbi2c_addr = 0;  // Current I2C address for bit-bang operations
+static int g_imu_read_count = 0;  // Track number of IMU reads to send init packet once
 
 // RTC counter thread - increments counter every second
 static void* rtc_counter_thread(void* arg) {
@@ -501,17 +502,22 @@ int bbI2CZip(unsigned SDA, char *inBuf, unsigned inLen, char *outBuf, unsigned o
                     // Simulate IMU (BNO086) responses
                     if (outBuf && bytes_read + read_len <= outLen) {
                         if (g_bbi2c_addr == 0x4A || g_bbi2c_addr == 0x4B) {
-                            // BNO086 IMU - return SHTP packet header format
-                            // First 4 bytes are always the packet header
-                            if (read_len >= 4) {
-                                outBuf[bytes_read + 0] = 0xFF;  // Length LSB (0xFFFF = no data available)
-                                outBuf[bytes_read + 1] = 0xFF;  // Length MSB
+                            // BNO086 IMU - Simulate initialization sequence
+                            g_imu_read_count++;
+
+                            if (read_len == 4) {
+                                // Header read - return "no data" most of the time
+                                // This tells firmware no data is ready
+                                outBuf[bytes_read + 0] = 0x00;  // Length LSB (0 = no data)
+                                outBuf[bytes_read + 1] = 0x00;  // Length MSB
                                 outBuf[bytes_read + 2] = 0x00;  // Channel
                                 outBuf[bytes_read + 3] = 0x00;  // Sequence
-                                // Fill rest with zeros
-                                for (unsigned j = 4; j < read_len; j++) {
-                                    outBuf[bytes_read + j] = 0x00;
-                                }
+                                fprintf(stderr, "[LD_PRELOAD]   IMU: No data available (read #%d)\n", g_imu_read_count);
+                            } else {
+                                // Full packet read - should not happen if header says no data
+                                // But if it does, return zeros
+                                memset(&outBuf[bytes_read], 0, read_len);
+                                fprintf(stderr, "[LD_PRELOAD]   IMU: Returning %u zero bytes\n", read_len);
                             }
                         } else {
                             // Unknown device - return zeros
