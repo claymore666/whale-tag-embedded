@@ -133,6 +133,18 @@ int gpioInitialise(void) {
 
     fprintf(stderr, "[LD_PRELOAD] gpioInitialise() - Starting simulation\n");
 
+    // Initialize all sensor values with realistic defaults BEFORE firmware starts
+    // This ensures firmware sees valid data from the very first read
+    g_sim_state.pressure_bar = 1.0;          // Surface pressure (1 bar = ~0m depth)
+    g_sim_state.temperature_c = 20.0;        // Room temperature
+    g_sim_state.light_lux = 100;             // Moderate light
+    g_sim_state.battery_voltage = 3.7;       // Nominal LiPo voltage
+    memset(g_sim_state.gpio_states, 0, sizeof(g_sim_state.gpio_states));
+
+    fprintf(stderr, "[LD_PRELOAD] Sensors initialized: %.1f bar, %.1f°C, %u lux, %.1fV\n",
+            g_sim_state.pressure_bar, g_sim_state.temperature_c,
+            g_sim_state.light_lux, g_sim_state.battery_voltage);
+
     // Initialize RTC counter with current Unix timestamp
     g_sim_state.rtc_counter = (uint32_t)time(NULL);
     fprintf(stderr, "[LD_PRELOAD] RTC counter initialized to %u\n", g_sim_state.rtc_counter);
