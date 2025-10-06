@@ -4,10 +4,13 @@
  * This library intercepts pigpio function calls and simulates hardware behavior
  * without requiring real sensors or GPIO hardware.
  *
+ * Also intercepts file I/O to work around QEMU user-mode filesystem limitations.
+ *
  * Usage:
  *   LD_PRELOAD=./libpigpio_sim.so /opt/ceti-tag-data-capture/bin/cetiTagApp
  */
 
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -18,6 +21,11 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <dlfcn.h>
+#include <libgen.h>
+#include <stdarg.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 // Simulated sensor state
 typedef struct {
@@ -686,4 +694,73 @@ uint32_t gpioTick(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint32_t)((ts.tv_sec * 1000000) + (ts.tv_nsec / 1000));
+}
+
+// ============================================================================
+// File I/O Interception (workaround for QEMU user-mode filesystem limitations)
+// ============================================================================
+
+// Redirect /data/* paths to /tmp/data/* where QEMU can actually write
+static void redirect_path(const char* original, char* redirected, size_t size) {
+    if (strncmp(original, "/data/", 6) == 0) {
+        // Extract filename from /data/path
+        const char* filename = original + 6;  // Skip "/data/"
+        snprintf(redirected, size, "/tmp/qemu_data/%s", filename);
+
+        // Ensure /tmp/qemu_data exists
+        static int dir_created = 0;
+        if (!dir_created) {
+            system("mkdir -p /tmp/qemu_data");
+            dir_created = 1;
+            fprintf(stderr, "[LD_PRELOAD] File I/O redirected: /data/* -> /tmp/qemu_data/*\n");
+        }
+    } else {
+        snprintf(redirected, size, "%s", original);
+    }
+}
+
+// Function pointers to real implementations
+static FILE* (*real_fopen)(const char*, const char*) = NULL;
+static int (*real_open)(const char*, int, ...) = NULL;
+
+// Override fopen
+FILE* fopen(const char* path, const char* mode) {
+    if (!real_fopen) {
+        real_fopen = dlsym(RTLD_NEXT, "fopen");
+    }
+
+    char redirected[512];
+    redirect_path(path, redirected, sizeof(redirected));
+
+    if (strcmp(path, redirected) != 0) {
+        fprintf(stderr, "[LD_PRELOAD] fopen('%s', '%s') -> '%s'\n", path, mode, redirected);
+    }
+
+    return real_fopen(redirected, mode);
+}
+
+// Override open
+int open(const char* path, int flags, ...) {
+    if (!real_open) {
+        real_open = dlsym(RTLD_NEXT, "open");
+    }
+
+    char redirected[512];
+    redirect_path(path, redirected, sizeof(redirected));
+
+    if (strcmp(path, redirected) != 0) {
+        fprintf(stderr, "[LD_PRELOAD] open('%s', %d) -> '%s'\n", path, flags, redirected);
+    }
+
+    // Handle variadic mode parameter for O_CREAT
+    mode_t mode = 0;
+    if (flags & 0100) {  // O_CREAT
+        va_list args;
+        va_start(args, flags);
+        mode = va_arg(args, mode_t);
+        va_end(args);
+        return real_open(redirected, flags, mode);
+    }
+
+    return real_open(redirected, flags);
 }
