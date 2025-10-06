@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 #include <pthread.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -25,6 +26,8 @@ typedef struct {
     uint16_t light_lux;      // Light level in lux
     double battery_voltage;  // Battery voltage
     int gpio_states[32];     // GPIO pin states
+    uint32_t rtc_counter;    // RTC counter (Unix timestamp)
+    uint8_t iox_registers[0x50];  // IOX GPIO expander registers
 } SimState;
 
 static SimState g_sim_state = {
@@ -32,11 +35,24 @@ static SimState g_sim_state = {
     .temperature_c = 20.0,    // 20°C
     .light_lux = 1000,        // 1000 lux (daylight)
     .battery_voltage = 3.7,   // 3.7V (typical Li-ion)
+    .rtc_counter = 0,         // Initialized at startup with time()
 };
 
 static pthread_mutex_t g_sim_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int g_udp_socket = -1;
 static int g_gpio_initialized = 0;
+
+// RTC counter thread - increments counter every second
+static void* rtc_counter_thread(void* arg) {
+    fprintf(stderr, "[LD_PRELOAD] RTC counter thread started at %u\n", g_sim_state.rtc_counter);
+    while (1) {
+        sleep(1);
+        pthread_mutex_lock(&g_sim_mutex);
+        g_sim_state.rtc_counter++;
+        pthread_mutex_unlock(&g_sim_mutex);
+    }
+    return NULL;
+}
 
 // Network control (UDP port 9999)
 static void* network_control_thread(void* arg) {
@@ -106,10 +122,23 @@ int gpioInitialise(void) {
 
     fprintf(stderr, "[LD_PRELOAD] gpioInitialise() - Starting simulation\n");
 
+    // Initialize RTC counter with current Unix timestamp
+    g_sim_state.rtc_counter = (uint32_t)time(NULL);
+    fprintf(stderr, "[LD_PRELOAD] RTC counter initialized to %u\n", g_sim_state.rtc_counter);
+
+    // Initialize IOX registers to default state
+    memset(g_sim_state.iox_registers, 0, sizeof(g_sim_state.iox_registers));
+    g_sim_state.iox_registers[0x03] = 0xFF;  // CONFIGURATION: all pins input by default
+
+    // Start RTC counter thread
+    pthread_t rtc_thread;
+    pthread_create(&rtc_thread, NULL, rtc_counter_thread, NULL);
+    pthread_detach(rtc_thread);
+
     // Start network control thread
-    pthread_t thread;
-    pthread_create(&thread, NULL, network_control_thread, NULL);
-    pthread_detach(thread);
+    pthread_t net_thread;
+    pthread_create(&net_thread, NULL, network_control_thread, NULL);
+    pthread_detach(net_thread);
 
     g_gpio_initialized = 1;
     return 0;  // Success
@@ -226,6 +255,20 @@ int i2cReadByteData(unsigned handle, unsigned reg) {
 
     // Simulate sensor responses based on I2C address and register
     switch (addr) {
+        case 0x68:  // RTC - Real-Time Clock
+            // RTC counter is 32-bit value stored in registers 0-3 (little-endian)
+            if (reg < 4) {
+                result = (g_sim_state.rtc_counter >> (8 * reg)) & 0xFF;
+            }
+            break;
+
+        case 0x21:  // IOX - GPIO Expander (PCA9536-compatible)
+            // Read from IOX register array
+            if (reg < sizeof(g_sim_state.iox_registers)) {
+                result = g_sim_state.iox_registers[reg];
+            }
+            break;
+
         case 0x40:  // Keller 4LD pressure sensor
             // The Keller sensor uses i2cReadDevice for multi-byte reads
             // For single byte reads, return a reasonable value
@@ -277,7 +320,39 @@ int i2cWriteByteData(unsigned handle, unsigned reg, unsigned value) {
     unsigned addr = handle % 100;
     fprintf(stderr, "[LD_PRELOAD] i2cWriteByteData(handle=%u/addr=0x%02X, reg=0x%02X, value=0x%02X)\n",
             handle, addr, reg, value);
-    // For simulation, we just acknowledge the write
+
+    pthread_mutex_lock(&g_sim_mutex);
+
+    // Handle device-specific writes
+    switch (addr) {
+        case 0x21:  // IOX - GPIO Expander
+            if (reg < sizeof(g_sim_state.iox_registers)) {
+                g_sim_state.iox_registers[reg] = value;
+
+                // Log important register writes
+                if (reg == 0x01) {  // OUTPUT register
+                    fprintf(stderr, "[LD_PRELOAD] IOX OUTPUT register: 0x%02X (BURNWIRE_ON=%d)\n",
+                            value, (value >> 4) & 1);
+                }
+            }
+            break;
+
+        case 0x68:  // RTC - Real-Time Clock
+            // Allow writing to RTC counter (registers 0-3)
+            if (reg < 4) {
+                uint32_t mask = ~(0xFF << (8 * reg));
+                g_sim_state.rtc_counter = (g_sim_state.rtc_counter & mask) | (value << (8 * reg));
+                fprintf(stderr, "[LD_PRELOAD] RTC counter updated to %u\n", g_sim_state.rtc_counter);
+            }
+            break;
+
+        default:
+            // For other devices, just acknowledge the write
+            break;
+    }
+
+    pthread_mutex_unlock(&g_sim_mutex);
+
     return 0;  // Success
 }
 
