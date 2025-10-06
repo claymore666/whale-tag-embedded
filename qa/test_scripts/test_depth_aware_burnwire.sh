@@ -170,8 +170,17 @@ echo "  - Burnwire ONLY heats when underwater (>$BURN_DEPTH_THRESHOLD m)"
 echo "  - Active burn time counted separately from calendar time"
 echo "  - Burnwire pauses at surface during whale breathing intervals"
 echo ""
-echo "Phase 1: Wait for timeout ($TIMEOUT_S seconds)..."
-sleep $((TIMEOUT_S + 5))
+
+# Set initial depth to surface BEFORE timeout to prevent premature burning
+echo "Phase 0: Initialize at surface (prevent burning during timeout)"
+echo "  Setting initial depth: 0.5m (surface)"
+echo 'DEPTH=0.5' | docker exec -i $CONTAINER_NAME nc -u -w1 127.0.0.1 9999
+sleep 2
+
+echo ""
+echo "Phase 1: Wait for burnwire timeout ($TIMEOUT_S seconds)..."
+echo "  Tag at surface - burnwire should NOT activate yet"
+sleep $((TIMEOUT_S + 3))
 
 echo ""
 echo "Phase 2: Initial dive - Start burning (burnwire should turn ON)"
