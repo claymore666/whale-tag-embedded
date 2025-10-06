@@ -775,6 +775,7 @@ static void redirect_path(const char* original, char* redirected, size_t size) {
 // Function pointers to real implementations
 static FILE* (*real_fopen)(const char*, const char*) = NULL;
 static int (*real_open)(const char*, int, ...) = NULL;
+static int (*real_access)(const char*, int) = NULL;
 
 // Override fopen
 FILE* fopen(const char* path, const char* mode) {
@@ -816,4 +817,20 @@ int open(const char* path, int flags, ...) {
     }
 
     return real_open(redirected, flags);
+}
+
+// Override access
+int access(const char* path, int mode) {
+    if (!real_access) {
+        real_access = dlsym(RTLD_NEXT, "access");
+    }
+
+    char redirected[512];
+    redirect_path(path, redirected, sizeof(redirected));
+
+    if (strcmp(path, redirected) != 0) {
+        fprintf(stderr, "[LD_PRELOAD] access('%s', %d) -> '%s'\n", path, mode, redirected);
+    }
+
+    return real_access(redirected, mode);
 }
