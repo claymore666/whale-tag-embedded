@@ -473,8 +473,61 @@ int i2cReadWordData(unsigned handle, unsigned reg) {
             result = (int16_t)((g_sim_state.pressure_bar / scale_factor) + 16384.0);
             break;
 
-        case 0x36:  // MAX17320 battery gauge
-            result = (uint16_t)(g_sim_state.battery_voltage * 1000);
+        case 0x36:  // MAX17320 battery gauge (I2C addr for regs 0x000-0x0FF)
+        case 0x0b:  // MAX17320 upper range (I2C addr for regs 0x180-0x1FF)
+            {
+                uint16_t raw_value = 0;
+
+                // Handle register-specific conversions per MAX17320 datasheet
+                // Cell voltages: LSB = 0.000078125 V = 1/12800 V
+                if (reg == 0xD8) {  // Cell 1 voltage (MAX17320_REG_CELL1_VOLTAGE)
+                    raw_value = (uint16_t)(g_sim_state.battery_voltage / 0.000078125);
+                }
+                else if (reg == 0xD7) {  // Cell 2 voltage (MAX17320_REG_CELL2_VOLTAGE)
+                    raw_value = (uint16_t)(g_sim_state.battery_voltage / 0.000078125);
+                }
+                // Current: LSB = 1.5625 µV / R_sense (R_sense = 10mΩ)
+                // Positive = charging, negative = discharging
+                else if (reg == 0x1C) {  // Battery current (MAX17320_REG_BATT_CURRENT)
+                    // Simulate 100mA discharge: 100mA * 10mΩ = 1mV = 1000µV
+                    // raw = 1000 / 1.5625 = 640
+                    raw_value = (uint16_t)(100.0 / 0.15625);  // 100mA discharge
+                }
+                // Temperature: LSB = 1/256 °C
+                else if (reg == 0x3A) {  // Cell 0 temperature (MAX17320_REG_TEMP)
+                    raw_value = (uint16_t)(20.0 * 256);  // 20°C
+                }
+                else if (reg == 0x39) {  // Die temperature
+                    raw_value = (uint16_t)(25.0 * 256);  // 25°C
+                }
+                // State of charge: LSB = 1/256 %
+                else if (reg == 0x06) {  // State of charge (MAX17320_REG_REP_SOC)
+                    raw_value = (uint16_t)(75.0 * 256);  // 75% SOC
+                }
+                // Capacity: LSB = 0.005 mVh / R_sense
+                else if (reg == 0x05) {  // Remaining capacity
+                    raw_value = (uint16_t)(1500.0 / 0.05);  // 1500 mAh
+                }
+                else if (reg == 0x10) {  // Full capacity
+                    raw_value = (uint16_t)(2000.0 / 0.05);  // 2000 mAh
+                }
+                // Status registers
+                else if (reg == 0x00) {  // Status (MAX17320_REG_STATUS)
+                    raw_value = 0x0000;  // No errors, no alerts
+                }
+                else if (reg == 0xD0) {  // ProtStatus
+                    raw_value = 0x0000;  // No protection alerts
+                }
+                else if (reg == 0xAF) {  // ProtAlrt
+                    raw_value = 0x0000;  // No protection alerts
+                }
+                // Default for unhandled registers
+                else {
+                    raw_value = 0x0000;
+                }
+
+                result = raw_value;
+            }
             break;
 
         default:
