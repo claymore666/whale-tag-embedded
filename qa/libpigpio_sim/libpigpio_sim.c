@@ -147,6 +147,12 @@ int gpioRead(unsigned gpio) {
     return level;
 }
 
+int gpioSetISRFunc(unsigned gpio, unsigned edge, int timeout, void *f) {
+    fprintf(stderr, "[LD_PRELOAD] gpioSetISRFunc(gpio=%u, edge=%u, timeout=%d)\n", gpio, edge, timeout);
+    // For simulation, we don't trigger interrupts
+    return 0;  // Success
+}
+
 // I2C simulation
 int i2cOpen(unsigned i2cBus, unsigned i2cAddr, unsigned i2cFlags) {
     fprintf(stderr, "[LD_PRELOAD] i2cOpen(bus=%u, addr=0x%02X, flags=%u)\n", i2cBus, i2cAddr, i2cFlags);
@@ -265,6 +271,85 @@ int i2cReadByteData(unsigned handle, unsigned reg) {
     pthread_mutex_unlock(&g_sim_mutex);
 
     return result;
+}
+
+int i2cWriteByteData(unsigned handle, unsigned reg, unsigned value) {
+    unsigned addr = handle % 100;
+    fprintf(stderr, "[LD_PRELOAD] i2cWriteByteData(handle=%u/addr=0x%02X, reg=0x%02X, value=0x%02X)\n",
+            handle, addr, reg, value);
+    // For simulation, we just acknowledge the write
+    return 0;  // Success
+}
+
+int i2cReadWordData(unsigned handle, unsigned reg) {
+    unsigned addr = handle % 100;
+    fprintf(stderr, "[LD_PRELOAD] i2cReadWordData(handle=%u/addr=0x%02X, reg=0x%02X)\n", handle, addr, reg);
+
+    pthread_mutex_lock(&g_sim_mutex);
+
+    int result = 0;
+
+    // Similar to i2cReadByteData but returns 16-bit word
+    switch (addr) {
+        case 0x40:  // Keller 4LD pressure sensor
+            double scale_factor = (200.0 - 0.0) / 32768.0;
+            result = (int16_t)((g_sim_state.pressure_bar / scale_factor) + 16384.0);
+            break;
+
+        case 0x36:  // MAX17320 battery gauge
+            result = (uint16_t)(g_sim_state.battery_voltage * 1000);
+            break;
+
+        default:
+            result = 0;
+            break;
+    }
+
+    pthread_mutex_unlock(&g_sim_mutex);
+
+    return result;
+}
+
+int i2cWriteByte(unsigned handle, unsigned value) {
+    unsigned addr = handle % 100;
+    fprintf(stderr, "[LD_PRELOAD] i2cWriteByte(handle=%u/addr=0x%02X, value=0x%02X)\n", handle, addr, value);
+    return 0;  // Success
+}
+
+int i2cWriteWordData(unsigned handle, unsigned reg, unsigned value) {
+    unsigned addr = handle % 100;
+    fprintf(stderr, "[LD_PRELOAD] i2cWriteWordData(handle=%u/addr=0x%02X, reg=0x%02X, value=0x%04X)\n",
+            handle, addr, reg, value);
+    return 0;  // Success
+}
+
+// Serial functions
+int serOpen(char *sertty, unsigned baud, unsigned flags) {
+    fprintf(stderr, "[LD_PRELOAD] serOpen(tty=%s, baud=%u, flags=%u)\n", sertty, baud, flags);
+    // Return fake handle based on device name hash
+    return (int)(sertty[0] + baud % 100);
+}
+
+int serClose(unsigned handle) {
+    fprintf(stderr, "[LD_PRELOAD] serClose(handle=%u)\n", handle);
+    return 0;  // Success
+}
+
+int serDataAvailable(unsigned handle) {
+    // Return 0 (no data available) to prevent busy-waiting
+    // Suppress logging to avoid spam
+    return 0;
+}
+
+int serRead(unsigned handle, char *buf, unsigned count) {
+    fprintf(stderr, "[LD_PRELOAD] serRead(handle=%u, count=%u)\n", handle, count);
+    // Return 0 (no data) for simulation
+    return 0;
+}
+
+int serWrite(unsigned handle, char *buf, unsigned count) {
+    fprintf(stderr, "[LD_PRELOAD] serWrite(handle=%u, count=%u)\n", handle, count);
+    return count;  // Pretend all data was written
 }
 
 // Bit-bang I2C (for BNO086 IMU)
