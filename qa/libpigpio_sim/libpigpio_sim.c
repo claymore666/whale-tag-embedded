@@ -50,6 +50,9 @@ static int g_fpga_loading = 0;        // Track if FPGA bitstream loading is in p
 static int g_fpga_operation_count = 0; // Count GPIO operations during FPGA loading
 static int g_fpga_done = 0;           // Simulate FPGA_DONE signal
 
+// Pressure sensor simulation
+static uint8_t g_pressure_cmd_pending = 0;  // Track if measurement command was sent
+
 // RTC counter thread - increments counter every second
 static void* rtc_counter_thread(void* arg) {
     fprintf(stderr, "[LD_PRELOAD] RTC counter thread started at %u\n", g_sim_state.rtc_counter);
@@ -256,14 +259,38 @@ int i2cReadDevice(unsigned handle, char *buf, unsigned count) {
 
     // Simulate sensor responses based on I2C address
     switch (addr) {
-        case 0x40:  // Keller 4LD pressure sensor
-            if (count >= 2) {
+        case 0x40:  // Keller 4LD pressure sensor (primary address)
+        case 0x44:  // Keller/MSR pressure sensor (alternate address)
+            if (g_pressure_cmd_pending && count >= 3) {
+                // MSR/Keller response format (3 or 5 bytes):
+                // [0] = status byte
+                // [1] = pressure MSB
+                // [2] = pressure LSB
+                // [3] = temperature MSB (if count >= 5)
+                // [4] = temperature LSB (if count >= 5)
+
+                // Status byte: 0b01000000 = valid measurement, not busy
+                buf[0] = 0x40;
+
                 // Convert pressure (bar) to raw 16-bit value
                 // Formula from keller4ld.h: raw = (pressure / scale_factor) + 16384
                 double scale_factor = (200.0 - 0.0) / 32768.0;  // PRESSURE_MAX=200, PRESSURE_MIN=0
-                int16_t raw = (int16_t)((g_sim_state.pressure_bar / scale_factor) + 16384.0);
-                buf[0] = (raw >> 8) & 0xFF;  // MSB
-                buf[1] = raw & 0xFF;          // LSB
+                uint16_t pressure_raw = (uint16_t)((g_sim_state.pressure_bar / scale_factor) + 16384.0);
+                buf[1] = (pressure_raw >> 8) & 0xFF;  // MSB
+                buf[2] = pressure_raw & 0xFF;          // LSB
+
+                if (count >= 5) {
+                    // Temperature encoding: temp_raw = (temp_c + 50) / 0.05 + 24, then << 4
+                    // From keller4ld.h: temp_c = ((raw >> 4) - 24) * 0.05 - 50
+                    uint16_t temp_raw = (uint16_t)(((g_sim_state.temperature_c + 50.0) / 0.05 + 24.0)) << 4;
+                    buf[3] = (temp_raw >> 8) & 0xFF;  // MSB
+                    buf[4] = temp_raw & 0xFF;          // LSB
+                }
+
+                g_pressure_cmd_pending = 0;  // Clear pending flag
+
+                fprintf(stderr, "[LD_PRELOAD] Pressure sensor response: %.2f bar, %.1f°C (status=0x%02X)\n",
+                        g_sim_state.pressure_bar, g_sim_state.temperature_c, buf[0]);
             }
             break;
 
@@ -443,6 +470,18 @@ int i2cReadWordData(unsigned handle, unsigned reg) {
 int i2cWriteByte(unsigned handle, unsigned value) {
     unsigned addr = handle & 0xFF;  // Extract address from handle
     fprintf(stderr, "[LD_PRELOAD] i2cWriteByte(handle=%u/addr=0x%02X, value=0x%02X)\n", handle, addr, value);
+
+    pthread_mutex_lock(&g_sim_mutex);
+
+    // Handle pressure sensor measurement trigger
+    if ((addr == 0x40 || addr == 0x44) && value == 0xAC) {
+        // Keller 4LD measurement request command
+        g_pressure_cmd_pending = 1;
+        fprintf(stderr, "[LD_PRELOAD] Pressure sensor measurement triggered\n");
+    }
+
+    pthread_mutex_unlock(&g_sim_mutex);
+
     return 0;  // Success
 }
 
