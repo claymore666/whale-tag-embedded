@@ -185,7 +185,9 @@ int gpioSetISRFunc(unsigned gpio, unsigned edge, int timeout, void *f) {
 // I2C simulation
 int i2cOpen(unsigned i2cBus, unsigned i2cAddr, unsigned i2cFlags) {
     fprintf(stderr, "[LD_PRELOAD] i2cOpen(bus=%u, addr=0x%02X, flags=%u)\n", i2cBus, i2cAddr, i2cFlags);
-    return (int)(i2cBus * 100 + i2cAddr);  // Return fake handle
+    // Encode bus and address into handle: (bus << 16) | addr
+    // This allows addresses 0x00-0xFF on any bus
+    return (int)((i2cBus << 16) | i2cAddr);
 }
 
 int i2cClose(unsigned handle) {
@@ -194,7 +196,7 @@ int i2cClose(unsigned handle) {
 }
 
 int i2cReadDevice(unsigned handle, char *buf, unsigned count) {
-    unsigned addr = handle % 100;
+    unsigned addr = handle & 0xFF;  // Extract address from handle
     fprintf(stderr, "[LD_PRELOAD] i2cReadDevice(handle=%u/addr=0x%02X, count=%u)\n", handle, addr, count);
 
     pthread_mutex_lock(&g_sim_mutex);
@@ -240,13 +242,13 @@ int i2cReadDevice(unsigned handle, char *buf, unsigned count) {
 }
 
 int i2cWriteDevice(unsigned handle, char *buf, unsigned count) {
-    unsigned addr = handle % 100;
+    unsigned addr = handle & 0xFF;  // Extract address from handle
     fprintf(stderr, "[LD_PRELOAD] i2cWriteDevice(handle=%u/addr=0x%02X, count=%u)\n", handle, addr, count);
     return 0;  // Success
 }
 
 int i2cReadByteData(unsigned handle, unsigned reg) {
-    unsigned addr = handle % 100;
+    unsigned addr = handle & 0xFF;  // Extract address from handle
     fprintf(stderr, "[LD_PRELOAD] i2cReadByteData(handle=%u/addr=0x%02X, reg=0x%02X)\n", handle, addr, reg);
 
     pthread_mutex_lock(&g_sim_mutex);
@@ -317,7 +319,7 @@ int i2cReadByteData(unsigned handle, unsigned reg) {
 }
 
 int i2cWriteByteData(unsigned handle, unsigned reg, unsigned value) {
-    unsigned addr = handle % 100;
+    unsigned addr = handle & 0xFF;  // Extract address from handle
     fprintf(stderr, "[LD_PRELOAD] i2cWriteByteData(handle=%u/addr=0x%02X, reg=0x%02X, value=0x%02X)\n",
             handle, addr, reg, value);
 
@@ -357,7 +359,7 @@ int i2cWriteByteData(unsigned handle, unsigned reg, unsigned value) {
 }
 
 int i2cReadWordData(unsigned handle, unsigned reg) {
-    unsigned addr = handle % 100;
+    unsigned addr = handle & 0xFF;  // Extract address from handle
     fprintf(stderr, "[LD_PRELOAD] i2cReadWordData(handle=%u/addr=0x%02X, reg=0x%02X)\n", handle, addr, reg);
 
     pthread_mutex_lock(&g_sim_mutex);
@@ -386,13 +388,13 @@ int i2cReadWordData(unsigned handle, unsigned reg) {
 }
 
 int i2cWriteByte(unsigned handle, unsigned value) {
-    unsigned addr = handle % 100;
+    unsigned addr = handle & 0xFF;  // Extract address from handle
     fprintf(stderr, "[LD_PRELOAD] i2cWriteByte(handle=%u/addr=0x%02X, value=0x%02X)\n", handle, addr, value);
     return 0;  // Success
 }
 
 int i2cWriteWordData(unsigned handle, unsigned reg, unsigned value) {
-    unsigned addr = handle % 100;
+    unsigned addr = handle & 0xFF;  // Extract address from handle
     fprintf(stderr, "[LD_PRELOAD] i2cWriteWordData(handle=%u/addr=0x%02X, reg=0x%02X, value=0x%04X)\n",
             handle, addr, reg, value);
     return 0;  // Success
