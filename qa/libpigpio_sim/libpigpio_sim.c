@@ -45,6 +45,11 @@ static int g_bbi2c_open = 0;  // Track if bit-bang I2C is open
 static uint8_t g_bbi2c_addr = 0;  // Current I2C address for bit-bang operations
 static int g_imu_read_count = 0;  // Track number of IMU reads to send init packet once
 
+// FPGA bitstream loading simulation
+static int g_fpga_loading = 0;        // Track if FPGA bitstream loading is in progress
+static int g_fpga_operation_count = 0; // Count GPIO operations during FPGA loading
+static int g_fpga_done = 0;           // Simulate FPGA_DONE signal
+
 // RTC counter thread - increments counter every second
 static void* rtc_counter_thread(void* arg) {
     fprintf(stderr, "[LD_PRELOAD] RTC counter thread started at %u\n", g_sim_state.rtc_counter);
@@ -162,7 +167,43 @@ int gpioSetMode(unsigned gpio, unsigned mode) {
 }
 
 int gpioWrite(unsigned gpio, unsigned level) {
-    fprintf(stderr, "[LD_PRELOAD] gpioWrite(gpio=%u, level=%u)\n", gpio, level);
+    // FPGA bitstream loading fast-forward
+    // GPIO 20 = FPGA_DATA, GPIO 21 = FPGA_CLOCK
+    if ((gpio == 20 || gpio == 21) && !g_fpga_loading) {
+        g_fpga_loading = 1;
+        fprintf(stderr, "[LD_PRELOAD] ========================================\n");
+        fprintf(stderr, "[LD_PRELOAD] FPGA bitstream loading detected!\n");
+        fprintf(stderr, "[LD_PRELOAD] Fast-forwarding FPGA initialization...\n");
+        fprintf(stderr, "[LD_PRELOAD] ========================================\n");
+    }
+
+    if (g_fpga_loading && (gpio == 20 || gpio == 21)) {
+        g_fpga_operation_count++;
+
+        // After 1000 operations, signal completion and skip further GPIO writes
+        if (g_fpga_operation_count >= 1000) {
+            if (!g_fpga_done) {
+                g_fpga_done = 1;
+                fprintf(stderr, "[LD_PRELOAD] ========================================\n");
+                fprintf(stderr, "[LD_PRELOAD] FPGA programming complete (simulated)\n");
+                fprintf(stderr, "[LD_PRELOAD] Operations: %d (skipped %d)\n",
+                        g_fpga_operation_count, 19443840 - g_fpga_operation_count);
+                fprintf(stderr, "[LD_PRELOAD] ========================================\n");
+            }
+            // Skip further GPIO operations for speed
+            return 0;
+        }
+
+        // Log progress every 100 operations
+        if (g_fpga_operation_count % 100 == 0) {
+            fprintf(stderr, "[LD_PRELOAD] FPGA loading progress: %d operations...\n",
+                    g_fpga_operation_count);
+        }
+    } else {
+        // Normal GPIO write logging for non-FPGA pins
+        fprintf(stderr, "[LD_PRELOAD] gpioWrite(gpio=%u, level=%u)\n", gpio, level);
+    }
+
     pthread_mutex_lock(&g_sim_mutex);
     if (gpio < 32) {
         g_sim_state.gpio_states[gpio] = level;
@@ -175,7 +216,16 @@ int gpioRead(unsigned gpio) {
     pthread_mutex_lock(&g_sim_mutex);
     int level = (gpio < 32) ? g_sim_state.gpio_states[gpio] : 0;
     pthread_mutex_unlock(&g_sim_mutex);
-    fprintf(stderr, "[LD_PRELOAD] gpioRead(gpio=%u) = %d\n", gpio, level);
+
+    // GPIO 27 = FPGA_DONE signal
+    // Return HIGH when FPGA loading is complete (simulated)
+    if (gpio == 27 && g_fpga_done) {
+        level = 1;  // Signal FPGA programming success
+        fprintf(stderr, "[LD_PRELOAD] gpioRead(gpio=%u) = %d [FPGA_DONE]\n", gpio, level);
+    } else {
+        fprintf(stderr, "[LD_PRELOAD] gpioRead(gpio=%u) = %d\n", gpio, level);
+    }
+
     return level;
 }
 
