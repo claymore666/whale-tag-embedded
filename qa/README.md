@@ -38,9 +38,8 @@ cd qa/libpigpio_sim && make arm64
 ### Documentation
 
 - **QA_TESTING_GUIDE.md** - **Main guide** - Complete setup and workflow documentation
+- **HARDWARE_SIMULATION.md** - Hardware interface mapping and simulation reference
 - **libpigpio_sim/README.md** - LD_PRELOAD library implementation details
-- **E2E_SUCCESS.md** - Historical proof of concept (reference only)
-- **E2E_TEST_SUMMARY.md** - Historical testing approach comparison (reference only)
 
 ## How It Works
 
@@ -215,10 +214,9 @@ The real `libpigpio.so` is never called - our simulation completely replaces it.
 | Document | Purpose |
 |----------|---------|
 | **QA_TESTING_GUIDE.md** | **START HERE** - Complete testing guide |
+| **HARDWARE_SIMULATION.md** | Hardware interface reference (I2C, GPIO, sensors) |
 | README.md | This file - Overview and quick reference |
 | libpigpio_sim/README.md | LD_PRELOAD library implementation |
-| E2E_SUCCESS.md | Historical proof of concept |
-| E2E_TEST_SUMMARY.md | Historical approach comparison |
 
 ## Support
 
