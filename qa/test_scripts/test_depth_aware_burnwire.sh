@@ -50,19 +50,10 @@ if [ ! -f "qa/libpigpio_sim/build/libpigpio_sim_arm64.so" ]; then
     exit 1
 fi
 
-# Cleanup any existing container
+# Cleanup any existing container and loop devices
 docker rm -f $CONTAINER_NAME 2>/dev/null || true
-
-# Create test configuration
-echo "Creating test configuration..."
-cat > /tmp/ceti-test-config.txt <<EOF
-# Depth-Aware Burnwire Test Configuration
-timeout_s=$TIMEOUT_S
-burn_interval_s=$BURN_INTERVAL_S
-burn_depth_threshold=$BURN_DEPTH_THRESHOLD
-surface_pressure=$SURFACE_PRESSURE
-aprs_on_whale=false
-EOF
+echo "Cleaning up loop devices..."
+losetup -D 2>/dev/null || true
 
 echo "Test parameters:"
 echo "  timeout_s: $TIMEOUT_S"
@@ -85,14 +76,16 @@ docker run -d \
 echo "Installing container dependencies..."
 docker exec $CONTAINER_NAME bash -c "
     apt-get update -qq && \
-    apt-get install -y -qq kpartx qemu-user-static netcat-openbsd > /dev/null 2>&1
+    apt-get install -y -qq kpartx qemu-user-static netcat-openbsd procps > /dev/null 2>&1
 "
 
 # Mount SD card image
 echo "Mounting SD card image..."
-docker exec $CONTAINER_NAME bash -c "
+MOUNT_OUTPUT=$(docker exec $CONTAINER_NAME bash -c "
     set -e
-    kpartx -av /work/out/sdcard.img > /tmp/kpartx.out 2>&1
+    echo 'Running kpartx...'
+    kpartx -av /work/out/sdcard.img 2>&1 | tee /tmp/kpartx.out
+    echo 'Detecting loop device...'
     LOOP_DEVICE=\$(grep -oP 'loop\d+' /tmp/kpartx.out | head -1)
     if [ -z \"\$LOOP_DEVICE\" ]; then
         echo 'Error: Failed to detect loop device'
@@ -100,16 +93,33 @@ docker exec $CONTAINER_NAME bash -c "
         exit 1
     fi
     echo \"Detected loop device: \$LOOP_DEVICE\"
+    echo 'Mounting partition 2...'
     mkdir -p /mnt/img
-    mount /dev/mapper/\${LOOP_DEVICE}p2 /mnt/img
+    mount /dev/mapper/\${LOOP_DEVICE}p2 /mnt/img 2>&1
     echo \"Mounted partition 2\"
-"
+" 2>&1)
+
+if [ $? -ne 0 ]; then
+    echo -e "${RED}Error: Failed to mount SD card image${NC}"
+    echo "$MOUNT_OUTPUT"
+    docker rm -f $CONTAINER_NAME
+    exit 1
+fi
+
+echo "$MOUNT_OUTPUT"
 
 # Inject test configuration
 echo "Injecting test configuration..."
 docker exec $CONTAINER_NAME bash -c "
     mkdir -p /mnt/img/data/config
-    cp /tmp/ceti-test-config.txt /mnt/img/data/config/ceti-config.txt
+    cat > /mnt/img/data/config/ceti-config.txt <<EOF
+# Depth-Aware Burnwire Test Configuration
+timeout_s=$TIMEOUT_S
+burn_interval_s=$BURN_INTERVAL_S
+burn_depth_threshold=$BURN_DEPTH_THRESHOLD
+surface_pressure=$SURFACE_PRESSURE
+aprs_on_whale=false
+EOF
     echo 'Configuration injected:'
     cat /mnt/img/data/config/ceti-config.txt
 "
