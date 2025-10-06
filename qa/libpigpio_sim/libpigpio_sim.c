@@ -210,6 +210,63 @@ int i2cWriteDevice(unsigned handle, char *buf, unsigned count) {
     return 0;  // Success
 }
 
+int i2cReadByteData(unsigned handle, unsigned reg) {
+    unsigned addr = handle % 100;
+    fprintf(stderr, "[LD_PRELOAD] i2cReadByteData(handle=%u/addr=0x%02X, reg=0x%02X)\n", handle, addr, reg);
+
+    pthread_mutex_lock(&g_sim_mutex);
+
+    int result = 0;
+
+    // Simulate sensor responses based on I2C address and register
+    switch (addr) {
+        case 0x40:  // Keller 4LD pressure sensor
+            // The Keller sensor uses i2cReadDevice for multi-byte reads
+            // For single byte reads, return a reasonable value
+            // Convert pressure (bar) to raw 16-bit value
+            double scale_factor = (200.0 - 0.0) / 32768.0;
+            int16_t raw = (int16_t)((g_sim_state.pressure_bar / scale_factor) + 16384.0);
+
+            // Return MSB or LSB depending on register
+            if (reg == 0) {
+                result = (raw >> 8) & 0xFF;  // MSB
+            } else {
+                result = raw & 0xFF;         // LSB
+            }
+            break;
+
+        case 0x36:  // MAX17320 battery gauge
+            // Battery gauge registers vary by register number
+            // For simplicity, return voltage data
+            {
+                uint16_t voltage_mv = (uint16_t)(g_sim_state.battery_voltage * 1000);
+                if (reg == 0) {
+                    result = voltage_mv & 0xFF;          // LSB
+                } else {
+                    result = (voltage_mv >> 8) & 0xFF;   // MSB
+                }
+            }
+            break;
+
+        case 0x29:  // LTR-329ALS light sensor
+            if (reg == 0) {
+                result = g_sim_state.light_lux & 0xFF;         // LSB
+            } else {
+                result = (g_sim_state.light_lux >> 8) & 0xFF;  // MSB
+            }
+            break;
+
+        default:
+            // Unknown device - return 0
+            result = 0;
+            break;
+    }
+
+    pthread_mutex_unlock(&g_sim_mutex);
+
+    return result;
+}
+
 // Bit-bang I2C (for BNO086 IMU)
 int bbI2COpen(unsigned SDA, unsigned SCL, unsigned baud) {
     fprintf(stderr, "[LD_PRELOAD] bbI2COpen(SDA=%u, SCL=%u, baud=%u)\n", SDA, SCL, baud);
