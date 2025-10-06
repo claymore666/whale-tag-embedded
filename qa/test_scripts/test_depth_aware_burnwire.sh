@@ -62,7 +62,7 @@ echo ""
 
 # Map SD card partitions on HOST (kpartx needs kernel access)
 echo "Mapping SD card partitions..."
-KPARTX_OUT=$(kpartx -av out/sdcard.img)
+KPARTX_OUT=$(sudo /usr/sbin/kpartx -av out/sdcard.img)
 echo "$KPARTX_OUT"
 sleep 1
 
@@ -331,7 +331,7 @@ else
     docker rm -f $CONTAINER_NAME
     # Unmount and remove loop devices
     echo "Cleaning up loop devices..."
-    kpartx -dv out/sdcard.img || true
+    sudo /usr/sbin/kpartx -dv out/sdcard.img || true
 fi
 
 echo ""
