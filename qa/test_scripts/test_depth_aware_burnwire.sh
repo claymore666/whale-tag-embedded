@@ -120,8 +120,9 @@ docker exec $CONTAINER_NAME bash -c "
 # NOTE: Config parser expects specific parameter names (see config.c):
 #   - timeout_release (not timeout_s)
 #   - burn_interval (not burn_interval_s)
-timeout_release=$TIMEOUT_S
-burn_interval=$BURN_INTERVAL_S
+# NOTE: Parser uses strtotime_s() with unit suffixes (s/m/h/d), defaults to MINUTES if no unit!
+timeout_release=${TIMEOUT_S}s
+burn_interval=${BURN_INTERVAL_S}s
 burn_depth_threshold=$BURN_DEPTH_THRESHOLD
 surface_pressure=$SURFACE_PRESSURE
 aprs_on_whale=false
@@ -132,8 +133,8 @@ EOF
     mkdir -p /tmp/qemu_data/config
     cat > /tmp/qemu_data/config/ceti-config.txt <<EOF
 # Depth-Aware Burnwire Test Configuration
-timeout_release=$TIMEOUT_S
-burn_interval=$BURN_INTERVAL_S
+timeout_release=${TIMEOUT_S}s
+burn_interval=${BURN_INTERVAL_S}s
 burn_depth_threshold=$BURN_DEPTH_THRESHOLD
 surface_pressure=$SURFACE_PRESSURE
 aprs_on_whale=false

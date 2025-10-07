@@ -186,8 +186,8 @@ docker exec $CONTAINER_NAME bash -c "
     mkdir -p /mnt/img/data/config
     cat > /mnt/img/data/config/ceti-config.txt <<EOF
 # NOTE: Config parser expects specific names (see config.c line 89):
-timeout_release=10     # NOT timeout_s
-burn_interval=60       # NOT burn_interval_s
+timeout_release=10s    # NOT timeout_s; 's' suffix required (defaults to MINUTES!)
+burn_interval=60s      # NOT burn_interval_s; 's' suffix required
 burn_depth_threshold=4.0
 surface_pressure=0.3
 EOF
@@ -197,17 +197,19 @@ EOF
 docker exec $CONTAINER_NAME bash -c "
     mkdir -p /tmp/qemu_data/config
     cat > /tmp/qemu_data/config/ceti-config.txt <<EOF
-timeout_release=10
-burn_interval=60
+timeout_release=10s
+burn_interval=60s
 burn_depth_threshold=4.0
 surface_pressure=0.3
 EOF
 "
 ```
 
-**CRITICAL:** The config parser (config.c:89) expects `timeout_release` and `burn_interval`, NOT `timeout_s` and `burn_interval_s`. Using wrong names causes firmware to use default values (timeout_release = 345600s = 96 hours!).
+**CRITICAL #1:** The config parser (config.c:89) expects `timeout_release` and `burn_interval`, NOT `timeout_s` and `burn_interval_s`. Using wrong names causes firmware to use default values (timeout_release = 345600s = 96 hours!).
 
-**Discovery:** Found by checking elapsed time (106s) vs timeout (10s) and realizing timeout check should have triggered. Investigation revealed config file didn't exist at redirected path.
+**CRITICAL #2:** The parser uses `strtotime_s()` (config.c:376) which supports unit suffixes (s/m/h/d) but **defaults to MINUTES if no unit specified!** Always append 's' for seconds: `timeout_release=10s` (not `timeout_release=10` which means 10 minutes = 600 seconds).
+
+**Discovery:** Found by checking elapsed time vs timeout and examining config snapshot. Value of 600s in snapshot revealed parser interpreted `timeout_release=10` as 10 minutes (default unit) instead of 10 seconds.
 
 ## ✅ SOLUTION IMPLEMENTED: LD_PRELOAD File I/O Redirection
 
