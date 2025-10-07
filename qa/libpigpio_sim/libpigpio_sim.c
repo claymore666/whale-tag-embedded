@@ -311,6 +311,12 @@ int i2cReadDevice(unsigned handle, char *buf, unsigned count) {
 
                 fprintf(stderr, "[LD_PRELOAD] Pressure sensor response: %.2f bar, %.1f°C (status=0x%02X)\n",
                         g_sim_state.pressure_bar, g_sim_state.temperature_c, buf[0]);
+            } else {
+                // No pending command or invalid count - return zeros
+                // This prevents returning uninitialized buffer data
+                memset(buf, 0, count);
+                fprintf(stderr, "[LD_PRELOAD] WARNING: Pressure sensor read without trigger (pending=%d, count=%u)\n",
+                        g_pressure_cmd_pending, count);
             }
             break;
 
