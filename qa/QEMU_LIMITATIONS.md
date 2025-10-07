@@ -179,14 +179,17 @@ The `qa/e2e-test.sh` script works for basic verification but:
 - `burn_interval_s` defaults instead of 60s test value
 - Burnwire never triggers during test because timeout never expires
 
-**Solution:** Test script must copy config to BOTH locations:
+**Solution:** Test script must copy config to BOTH locations with CORRECT parameter names:
 ```bash
 # Write to mount point (for reference/debugging)
 docker exec $CONTAINER_NAME bash -c "
     mkdir -p /mnt/img/data/config
     cat > /mnt/img/data/config/ceti-config.txt <<EOF
-timeout_s=10
-burn_interval_s=60
+# NOTE: Config parser expects specific names (see config.c line 89):
+timeout_release=10     # NOT timeout_s
+burn_interval=60       # NOT burn_interval_s
+burn_depth_threshold=4.0
+surface_pressure=0.3
 EOF
 "
 
@@ -194,11 +197,15 @@ EOF
 docker exec $CONTAINER_NAME bash -c "
     mkdir -p /tmp/qemu_data/config
     cat > /tmp/qemu_data/config/ceti-config.txt <<EOF
-timeout_s=10
-burn_interval_s=60
+timeout_release=10
+burn_interval=60
+burn_depth_threshold=4.0
+surface_pressure=0.3
 EOF
 "
 ```
+
+**CRITICAL:** The config parser (config.c:89) expects `timeout_release` and `burn_interval`, NOT `timeout_s` and `burn_interval_s`. Using wrong names causes firmware to use default values (timeout_release = 345600s = 96 hours!).
 
 **Discovery:** Found by checking elapsed time (106s) vs timeout (10s) and realizing timeout check should have triggered. Investigation revealed config file didn't exist at redirected path.
 
